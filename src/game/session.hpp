@@ -13,6 +13,8 @@ public:
 
   void step();
   void step_ticks(sim::Tick count);
+  [[nodiscard]] bool set_focus(sim::Focus focus);
+  [[nodiscard]] bool focus_available() const;
 
   [[nodiscard]] const sim::World& world() const { return world_; }
 

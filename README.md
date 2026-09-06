@@ -2,7 +2,7 @@
 
 A desktop incremental game about nurturing an autonomous ant colony: watch tunnels grow, improve the colony's habits, and send a new generation into the world.
 
-**Status: M0 and M1 complete.** The repository now builds a deterministic, watchable colony slice: a queen and six workers navigate seeded terrain, reserve finite food, visibly carry it home, and credit the colony store exactly once. Brood, excavation, progression, and saving begin in later milestones.
+**Status: M0–M2 complete.** The deterministic living colony now chooses work from changing needs, lays and nurses brood, excavates connected tunnels, carries spoil, follows bounded food trails, ages, dies, and cleans recoverable remains. Progression and saving begin in the next milestones.
 
 ## Start here
 
@@ -33,7 +33,7 @@ ctest --preset dev
 ./build/dev/ant_farm --seed 42
 ```
 
-The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/2×/5× speed. It uses the bundled Nunito SemiBold face for larger, stronger UI copy. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
+The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/2×/5× speed. Its calm paper-and-diorama interface uses a high-resolution bundled Nunito atlas with DPI-aware rendering for crisp Retina text. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
 
 For simulation-only work:
 

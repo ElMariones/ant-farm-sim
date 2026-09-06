@@ -3,6 +3,7 @@
 #include "sim/components.hpp"
 #include "sim/grid.hpp"
 #include "sim/navigation.hpp"
+#include "sim/pheromones.hpp"
 #include "sim/rng.hpp"
 
 #include <array>
@@ -27,7 +28,8 @@ struct FoodSource {
 struct FoodStore {
   std::int64_t carbohydrate{};
   std::int64_t protein{};
-  std::int64_t capacity_per_nutrient{};
+  std::int64_t carbohydrate_capacity{};
+  std::int64_t protein_capacity{};
 };
 
 struct WorldStats {
@@ -38,6 +40,15 @@ struct WorldStats {
   std::int64_t delivered{};
   std::int64_t external_refill{};
   std::uint64_t completed_round_trips{};
+  std::uint64_t cells_excavated{};
+  std::uint64_t spoil_delivered{};
+  std::uint64_t eggs_laid{};
+  std::uint64_t workers_born{};
+  std::uint64_t deaths{};
+  std::uint64_t corpses_cleaned{};
+  std::int64_t consumed_carbohydrate{};
+  std::int64_t consumed_protein{};
+  std::int64_t decayed_food{};
 };
 
 struct ActorSnapshot {
@@ -50,6 +61,39 @@ struct ActorSnapshot {
   double previous_y{};
   Nutrient cargo_nutrient{Nutrient::Carbohydrate};
   std::int64_t cargo_amount{};
+  CargoKind cargo_kind{CargoKind::None};
+  Task task{Task::Idle};
+  Tick age{};
+};
+
+struct BroodSnapshot {
+  EntityId id{};
+  BroodStage stage{BroodStage::Egg};
+  GridPos position{};
+  Tick progress{};
+  Tick target{};
+  Tick care_remaining{};
+  Tick starvation{};
+};
+
+struct CorpseSnapshot {
+  EntityId id{};
+  GridPos position{};
+  Tick age{};
+  bool cleanable{};
+};
+
+struct DroppedCargoSnapshot {
+  EntityId id{};
+  GridPos position{};
+  Nutrient nutrient{Nutrient::Carbohydrate};
+  std::int64_t amount{};
+  Tick age{};
+};
+
+struct TaskDiagnostics {
+  std::array<std::uint16_t, 4> stimuli{};
+  std::array<std::uint32_t, 5> workers_by_task{};
 };
 
 class World {
@@ -68,11 +112,28 @@ public:
   [[nodiscard]] const FoodStore& stores() const { return stores_; }
   [[nodiscard]] const WorldStats& stats() const { return stats_; }
   [[nodiscard]] std::vector<ActorSnapshot> actors() const;
+  [[nodiscard]] std::vector<BroodSnapshot> brood() const;
+  [[nodiscard]] const std::vector<CorpseSnapshot>& corpses() const { return corpses_; }
+  [[nodiscard]] const std::vector<DroppedCargoSnapshot>& dropped_food() const { return dropped_food_; }
+  [[nodiscard]] const TrailField& trails() const { return trails_; }
+  [[nodiscard]] const TaskDiagnostics& task_diagnostics() const { return task_diagnostics_; }
+  [[nodiscard]] int nursery_capacity() const { return nursery_capacity_; }
+  [[nodiscard]] int connected_nest_air() const { return connected_nest_air_; }
+  [[nodiscard]] std::uint64_t spoil_mound() const { return spoil_mound_; }
+  [[nodiscard]] bool queen_alive() const { return queen_alive_; }
+  [[nodiscard]] bool decline() const { return decline_; }
+  [[nodiscard]] bool extinct() const { return extinct_; }
+  [[nodiscard]] Focus focus() const { return focus_; }
+  void set_focus(Focus focus) { focus_ = focus; }
   [[nodiscard]] std::uint64_t canonical_hash() const;
   [[nodiscard]] bool invariant_holds() const;
 
   void debug_set_source_amount(std::size_t index, std::int64_t amount);
+  void debug_set_source_refill(std::size_t index, std::int64_t amount);
   void debug_set_store(Nutrient nutrient, std::int64_t amount);
+  void debug_set_worker_lifespan(EntityId id, Tick lifespan);
+  void debug_spawn_brood(BroodStage stage, Tick progress = 0, Tick starvation = 0);
+  void debug_kill_queen();
 
 private:
   void spawn_queen();
@@ -87,6 +148,21 @@ private:
   void release_reservation(Forager& forager);
   [[nodiscard]] std::int64_t& store_for(Nutrient nutrient);
   [[nodiscard]] std::int64_t store_for(Nutrient nutrient) const;
+  [[nodiscard]] std::int64_t capacity_for(Nutrient nutrient) const;
+  void recompute_needs_and_frontiers();
+  void choose_task(entt::entity entity);
+  void process_worker(entt::entity entity, int& path_budget);
+  void process_excavator(entt::entity entity, int& path_budget);
+  void process_nurse(entt::entity entity, int& path_budget);
+  void process_cleaner(entt::entity entity, int& path_budget);
+  void route_to(entt::entity entity, GridPos target, int& path_budget);
+  void deliver_non_food(entt::entity entity);
+  void update_biology();
+  void update_trails();
+  void remove_dead_workers();
+  void spawn_worker(GridPos position);
+  [[nodiscard]] bool consume(Nutrient nutrient, std::int64_t amount);
+  [[nodiscard]] Tick brood_target(BroodStage stage) const;
 
   std::uint64_t seed_{};
   Tick tick_{};
@@ -95,9 +171,27 @@ private:
   GridPos home_{};
   HomeField home_field_;
   std::array<FoodSource, 2> sources_{};
-  FoodStore stores_{2'000, 2'000, 20'000};
+  FoodStore stores_{60'000, 30'000, 200'000, 100'000};
   WorldStats stats_{};
   Pcg32 behavior_rng_;
+  Pcg32 lifecycle_rng_;
+  TrailField trails_;
+  TaskDiagnostics task_diagnostics_{};
+  std::vector<GridPos> frontiers_;
+  std::uint64_t frontier_revision_{};
+  std::vector<std::uint16_t> dig_work_;
+  std::vector<BroodSnapshot> brood_;
+  std::vector<CorpseSnapshot> corpses_;
+  std::vector<DroppedCargoSnapshot> dropped_food_;
+  int connected_nest_air_{};
+  int nursery_capacity_{12};
+  std::uint64_t spoil_mound_{};
+  Tick next_laying_{240};
+  Tick queen_starvation_{};
+  bool queen_alive_{true};
+  bool decline_{};
+  bool extinct_{};
+  Focus focus_{Focus::Balanced};
   entt::registry registry_;
   std::vector<entt::entity> ordered_entities_;
 };

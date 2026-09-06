@@ -24,6 +24,9 @@ constexpr Color kCarbohydrate{221, 189, 103, 255};
 constexpr Color kProtein{199, 127, 101, 255};
 constexpr Color kBrood{234, 219, 192, 255};
 constexpr Color kSelection{152, 203, 195, 255};
+constexpr Color kPaperSoft{246, 239, 220, 255};
+constexpr Color kMutedInk{85, 91, 84, 255};
+constexpr Color kWarmLine{193, 176, 143, 255};
 
 Color material_color(const sim::Material material, const int x, const int y,
                      const std::uint64_t seed) {
@@ -53,18 +56,14 @@ const char* nutrient_name(const sim::Nutrient nutrient) {
   return nutrient == sim::Nutrient::Carbohydrate ? "carbohydrate" : "protein";
 }
 
-const char* state_name(const sim::ForageState state) {
-  switch (state) {
-  case sim::ForageState::AtHome:
-    return "Choosing a route";
-  case sim::ForageState::ToSource:
-    return "Foraging";
-  case sim::ForageState::Returning:
-    return "Returning to storage";
-  case sim::ForageState::WaitingForStorage:
-    return "Waiting for storage";
+const char* focus_name(const sim::Focus focus) {
+  switch (focus) {
+  case sim::Focus::Balanced: return "Balanced";
+  case sim::Focus::Growth: return "Growth";
+  case sim::Focus::Expansion: return "Expansion";
+  case sim::Focus::Foraging: return "Foraging";
   }
-  return "Unknown";
+  return "Balanced";
 }
 
 } // namespace
@@ -76,7 +75,10 @@ Renderer::Renderer() {
   const std::filesystem::path source =
       std::filesystem::path(ANT_SOURCE_ASSET_DIR) / "fonts" / "Nunito-SemiBold.ttf";
   const std::filesystem::path selected = std::filesystem::exists(bundled) ? bundled : source;
-  font_ = LoadFontEx(selected.string().c_str(), 64, nullptr, 0);
+  // A generously sized atlas scales down cleanly on Retina and fractional window scaling.
+  const Vector2 dpi = GetWindowScaleDPI();
+  const int atlas_size = static_cast<int>(std::ceil(128.0F * std::max(dpi.x, dpi.y)));
+  font_ = LoadFontEx(selected.string().c_str(), atlas_size, nullptr, 0);
   font_loaded_ = font_.texture.id != 0;
   if (font_loaded_) {
     SetTextureFilter(font_.texture, TEXTURE_FILTER_BILINEAR);
@@ -98,8 +100,8 @@ void Renderer::draw_text(const char* text, const int x, const int y, const int s
 }
 
 void Renderer::draw_button(const Rectangle bounds, const char* label, const bool active) const {
-  DrawRectangleRec(bounds, active ? kSelection : Color{221, 211, 187, 255});
-  DrawRectangleLinesEx(bounds, 1.0F, kInk);
+  DrawRectangleRounded(bounds, 0.22F, 8, active ? kSelection : Color{229, 219, 195, 255});
+  DrawRectangleRoundedLinesEx(bounds, 0.22F, 8, 1.0F, active ? Color{69, 111, 103, 255} : kWarmLine);
   const Vector2 measured = MeasureTextEx(font_, label, 19.0F, 0.0F);
   DrawTextEx(font_, label, {bounds.x + (bounds.width - measured.x) * 0.5F, bounds.y + 8.0F}, 19.0F,
              0.0F, kInk);
@@ -182,12 +184,47 @@ void Renderer::draw_world(const game::GameView& view, const double interpolation
       DrawPoly(center, 5, 3.1F, -18.0F, color);
       DrawPolyLines(center, 5, 3.2F, -18.0F, kInk);
     }
-    const float font_size = 16.0F / camera_.zoom();
-    DrawTextEx(font_, TextFormat("%lld", static_cast<long long>(source.amount / 1000)),
-               {center.x - 2.0F, center.y - 7.0F}, font_size, 0.5F / camera_.zoom(), kInk);
+  }
+
+  for (const sim::BroodSnapshot& brood : view.brood) {
+    const Vector2 center{static_cast<float>(brood.position.x) + 0.5F,
+                         static_cast<float>(brood.position.y) + 0.5F};
+    if (brood.stage == sim::BroodStage::Egg) {
+      DrawEllipse(static_cast<int>(center.x), static_cast<int>(center.y), 0.45F, 0.7F, kBrood);
+    } else if (brood.stage == sim::BroodStage::Larva) {
+      DrawCircleV(center, 0.75F, kBrood);
+      DrawCircleV({center.x + 0.65F, center.y + 0.1F}, 0.52F, kBrood);
+    } else {
+      DrawEllipse(static_cast<int>(center.x), static_cast<int>(center.y), 0.75F, 1.15F, kBrood);
+    }
+  }
+
+  for (const sim::CorpseSnapshot& corpse : view.corpses) {
+    const Vector2 center{static_cast<float>(corpse.position.x) + 0.5F,
+                         static_cast<float>(corpse.position.y) + 0.5F};
+    DrawLineEx({center.x - 0.8F, center.y - 0.6F}, {center.x + 0.8F, center.y + 0.6F}, 0.25F,
+               Color{124, 102, 82, 255});
+    DrawLineEx({center.x + 0.8F, center.y - 0.6F}, {center.x - 0.8F, center.y + 0.6F}, 0.25F,
+               Color{124, 102, 82, 255});
+  }
+
+  for (const sim::DroppedCargoSnapshot& dropped : view.dropped_food) {
+    const Vector2 center{static_cast<float>(dropped.position.x) + 0.5F,
+                         static_cast<float>(dropped.position.y) + 0.5F};
+    const Color color = dropped.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
+    DrawCircleV(center, 0.65F, color);
+    DrawCircleLinesV(center, 0.85F, kPaper);
+  }
+
+  if (view.spoil_mound > 0) {
+    const float mound = std::min(8.0F, 1.5F + static_cast<float>(view.spoil_mound) * 0.3F);
+    DrawEllipse(view.home.x + 10, 31, mound, mound * 0.35F, Color{126, 91, 58, 255});
   }
 
   for (const sim::ActorSnapshot& actor : view.actors) {
+    if (actor.kind == sim::AntKind::Queen && !view.queen_alive) {
+      continue;
+    }
     draw_ant(actor, interpolation_alpha, camera_.zoom(), selected_id_ == actor.id);
   }
 
@@ -237,32 +274,37 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
                               const bool simulation_limited) {
   const int width = GetScreenWidth();
   const int height = GetScreenHeight();
-  DrawRectangle(0, 0, width, 64, kPaper);
-  DrawLine(0, 63, width, 63, kInk);
-  draw_text("ANT FARM", 20, 14, 27);
-  draw_text(TextFormat("Workers  %d", static_cast<int>(view.actors.size()) - 1), 170, 20, 20);
-  draw_text(TextFormat("Carbs  %lld", static_cast<long long>(view.stores.carbohydrate / 1000)), 318,
-            20, 20);
-  draw_text(TextFormat("Protein  %lld", static_cast<long long>(view.stores.protein / 1000)), 444,
-            20, 20);
-  draw_text(
-      TextFormat("Trips  %llu", static_cast<unsigned long long>(view.stats.completed_round_trips)),
-      594, 20, 20);
+  const int worker_count = static_cast<int>(std::count_if(
+      view.actors.begin(), view.actors.end(), [](const sim::ActorSnapshot& actor) {
+        return actor.kind == sim::AntKind::Worker;
+      }));
+  DrawRectangle(0, 0, width, 72, kPaperSoft);
+  DrawRectangle(0, 68, width, 4, Color{112, 132, 87, 255});
+  draw_text("ANT FARM", 22, 15, 27);
+  draw_text("LIVING COLONY", 23, 44, 13, kMutedInk);
+  const int metric_start = width >= 1180 ? 190 : 170;
+  const int metric_width = width >= 1180 ? 145 : 125;
+  const std::array<std::pair<const char*, std::string>, 4> metrics{{
+      {"WORKERS", std::to_string(worker_count)}, {"BROOD", std::to_string(view.brood.size())},
+      {"CARBS", TextFormat("%lld", static_cast<long long>(view.stores.carbohydrate / 1000))},
+      {"PROTEIN", TextFormat("%lld", static_cast<long long>(view.stores.protein / 1000))}}};
+  for (std::size_t index = 0; index < metrics.size(); ++index) {
+    const int x = metric_start + static_cast<int>(index) * metric_width;
+    draw_text(metrics[index].first, x, 14, 12, kMutedInk);
+    draw_text(metrics[index].second.c_str(), x, 32, 23);
+  }
 
   const float footer_y = static_cast<float>(height - 60);
-  DrawRectangle(0, height - 60, width, 60, kPaper);
-  DrawLine(0, height - 60, width, height - 60, kInk);
+  DrawRectangle(0, height - 60, width, 60, kPaperSoft);
+  DrawLine(0, height - 60, width, height - 60, kWarmLine);
   draw_button({18.0F, footer_y + 9.0F, 94.0F, 42.0F}, paused ? "Resume" : "Pause", paused);
   draw_button({130.0F, footer_y + 9.0F, 58.0F, 42.0F}, "1x", speed == 1);
   draw_button({194.0F, footer_y + 9.0F, 58.0F, 42.0F}, "2x", speed == 2);
   draw_button({258.0F, footer_y + 9.0F, 58.0F, 42.0F}, "5x", speed == 5);
-  draw_text(TextFormat("Seed %llu  |  Tick %llu  |  Zoom %.1fx",
-                       static_cast<unsigned long long>(view.seed),
-                       static_cast<unsigned long long>(view.tick), camera_.zoom()),
-            350, height - 39, 18);
+  draw_text("Generation 1", 350, height - 39, 18);
   if (width >= 1200) {
-    draw_text("Drag: pan  |  Wheel: zoom  |  Click: inspect  |  I: panel", width - 590, height - 39,
-              18, Color{71, 78, 72, 255});
+    draw_text("Drag to pan  |  Scroll to zoom  |  Click an ant", width - 530, height - 39, 17,
+              kMutedInk);
   }
 
   if (simulation_limited) {
@@ -276,23 +318,39 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   }
   const int panel_width = width >= 1120 ? 320 : 300;
   const int panel_x = width - panel_width;
-  DrawRectangle(panel_x, 64, panel_width, height - 124, Color{238, 228, 204, 245});
-  DrawLine(panel_x, 64, panel_x, height - 60, kInk);
-  draw_text("COLONY", panel_x + 22, 84, 22);
-  draw_text("A steady first forage", panel_x + 22, 122, 20);
-  draw_text("Guided behavior (M1)", panel_x + 22, 153, 18, Color{85, 91, 84, 255});
+  DrawRectangle(panel_x - 7, 72, 7, height - 132, Color{37, 45, 40, 35});
+  DrawRectangle(panel_x, 72, panel_width, height - 132, Color{246, 239, 220, 248});
+  draw_text("COLONY", panel_x + 22, 92, 15, kMutedInk);
+  const char* condition = view.extinct ? "The colony is still" : view.decline ? "The queen is gone" :
+                          view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity) ? "Nursery is full" :
+                          view.stores.protein < 10'000 ? "Protein is running low" : "Growing steadily";
+  draw_text(condition, panel_x + 22, 116, 22, view.decline ? kProtein : kInk);
+  draw_text(TextFormat("%d workers tending %zu brood", worker_count, view.brood.size()),
+            panel_x + 22, 148, 16, kMutedInk);
 
-  draw_text("STORES", panel_x + 22, 203, 20);
-  draw_text(TextFormat("Carbohydrate   %lld / %lld",
-                       static_cast<long long>(view.stores.carbohydrate / 1000),
-                       static_cast<long long>(view.stores.capacity_per_nutrient / 1000)),
-            panel_x + 22, 235, 18);
-  draw_text(TextFormat("Protein          %lld / %lld",
-                       static_cast<long long>(view.stores.protein / 1000),
-                       static_cast<long long>(view.stores.capacity_per_nutrient / 1000)),
-            panel_x + 22, 264, 18);
+  const Rectangle nursery_card{static_cast<float>(panel_x + 16), 180.0F,
+                                static_cast<float>(panel_width - 32), 88.0F};
+  DrawRectangleRounded(nursery_card, 0.12F, 6, kPaper);
+  DrawRectangleRoundedLinesEx(nursery_card, 0.12F, 6, 1.0F, kWarmLine);
+  draw_text("NURSERY", panel_x + 30, 195, 13, kMutedInk);
+  draw_text(TextFormat("%zu of %d spaces", view.brood.size(), view.nursery_capacity),
+            panel_x + 30, 216, 19);
+  const float ratio = view.nursery_capacity == 0 ? 0.0F : std::min(1.0F, static_cast<float>(view.brood.size()) / static_cast<float>(view.nursery_capacity));
+  DrawRectangle(panel_x + 30, 247, panel_width - 60, 7, Color{214, 200, 170, 255});
+  DrawRectangle(panel_x + 30, 247, static_cast<int>(static_cast<float>(panel_width - 60) * ratio), 7, kFoliage);
 
-  draw_text("SELECTED", panel_x + 22, 321, 20);
+  draw_text("COLONY ACTIVITY", panel_x + 22, 292, 14, kMutedInk);
+  draw_text(TextFormat("Forage %u   Dig %u   Nurse %u", view.tasks.workers_by_task[0],
+                       view.tasks.workers_by_task[1], view.tasks.workers_by_task[2]),
+            panel_x + 22, 317, 16);
+  draw_text(TextFormat("Focus: %s", focus_name(view.focus)), panel_x + 22, 344, 16, kMutedInk);
+  draw_text(TextFormat("%llu new cells  |  %llu births",
+                       static_cast<unsigned long long>(view.stats.cells_excavated),
+                       static_cast<unsigned long long>(view.stats.workers_born)),
+            panel_x + 22, 367, 16, kMutedInk);
+
+  DrawLine(panel_x + 20, 397, width - 20, 397, kWarmLine);
+  draw_text("SELECTED", panel_x + 22, 416, 14, kMutedInk);
   const sim::ActorSnapshot* selected = nullptr;
   for (const sim::ActorSnapshot& actor : view.actors) {
     if (selected_id_ == actor.id) {
@@ -301,35 +359,34 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
     }
   }
   if (selected == nullptr) {
-    draw_text("Click an ant to inspect it.", panel_x + 22, 354, 18, Color{85, 91, 84, 255});
+    draw_text("Click an ant to follow its work.", panel_x + 22, 444, 17, kMutedInk);
   } else {
     draw_text(TextFormat("%s  #%llu", selected->kind == sim::AntKind::Queen ? "Queen" : "Worker",
                          static_cast<unsigned long long>(selected->id)),
-              panel_x + 22, 354, 20);
+              panel_x + 22, 444, 20);
     if (selected->kind == sim::AntKind::Worker) {
-      draw_text(state_name(selected->forage_state), panel_x + 22, 387, 18);
+      draw_text(sim::task_name(selected->task), panel_x + 22, 475, 18);
       if (selected->cargo_amount > 0) {
-        draw_text(TextFormat("Carrying %lld %s",
-                             static_cast<long long>(selected->cargo_amount / 1000),
-                             nutrient_name(selected->cargo_nutrient)),
-                  panel_x + 22, 417, 18);
+        const char* carried = selected->cargo_kind == sim::CargoKind::Spoil ? "Carrying spoil" :
+                              selected->cargo_kind == sim::CargoKind::Corpse ? "Carrying a corpse" :
+                              TextFormat("Carrying %lld %s", static_cast<long long>(selected->cargo_amount / 1000), nutrient_name(selected->cargo_nutrient));
+        draw_text(carried, panel_x + 22, 504, 17);
       } else {
-        draw_text("Cargo: empty", panel_x + 22, 417, 18, Color{85, 91, 84, 255});
+        draw_text("Cargo is empty", panel_x + 22, 504, 17, kMutedInk);
       }
     } else {
-      draw_text("Founding queen", panel_x + 22, 387, 18);
+      draw_text(view.queen_alive ? "Founding queen | well tended" : "Queen deceased", panel_x + 22, 475, 17);
     }
   }
 
-  draw_text("OBJECTIVE", panel_x + 22, 484, 20);
-  if (view.stats.completed_round_trips == 0) {
-    draw_text("Watch a worker bring food", panel_x + 22, 518, 18);
-    draw_text("home to the nursery.", panel_x + 22, 546, 18);
-  } else {
-    draw_text("Food delivered to the colony", panel_x + 22, 518, 18);
-    draw_text(TextFormat("%llu complete round trips",
-                         static_cast<unsigned long long>(view.stats.completed_round_trips)),
-              panel_x + 22, 546, 18, Color{65, 112, 91, 255});
+  if (height >= 720) {
+    const int note_y = height - 178;
+    DrawRectangleRounded({static_cast<float>(panel_x + 16), static_cast<float>(note_y),
+                          static_cast<float>(panel_width - 32), 82.0F}, 0.12F, 6,
+                         Color{224, 231, 207, 255});
+    draw_text("A LIVING SYSTEM", panel_x + 30, note_y + 14, 13, Color{65, 92, 68, 255});
+    draw_text("Ants choose work from the", panel_x + 30, note_y + 35, 16);
+    draw_text("colony's changing needs.", panel_x + 30, note_y + 57, 16);
   }
 }
 

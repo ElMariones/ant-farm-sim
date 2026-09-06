@@ -93,9 +93,9 @@ int main(const int argc, char** argv) {
 #if defined(__APPLE__)
     initial_size = ant::app::recommended_initial_window_size(initial_size);
 #endif
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT);
     SetTraceLogLevel(LOG_WARNING);
-    InitWindow(initial_size.width, initial_size.height, "Ant Farm Sim — M1 Watchable Slice");
+    InitWindow(initial_size.width, initial_size.height, "Ant Farm Sim — Living Colony");
     SetWindowMinSize(1024, 640);
     const int monitor = GetCurrentMonitor();
     SetTargetFPS(options.target_fps);

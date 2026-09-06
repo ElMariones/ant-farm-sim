@@ -35,7 +35,9 @@ endfunction()
 add_library(ant_sim
   src/sim/grid.cpp
   src/sim/navigation.cpp
+  src/sim/pheromones.cpp
   src/sim/rng.cpp
+  src/sim/tasks.cpp
   src/sim/terrain_generation.cpp
   src/sim/world.cpp
 )
@@ -100,6 +102,7 @@ if(BUILD_TESTING)
     tests/unit/grid_tests.cpp
     tests/unit/navigation_tests.cpp
     tests/unit/rng_tests.cpp
+    tests/unit/task_system_tests.cpp
     tests/unit/window_size_tests.cpp
     tests/unit/world_tests.cpp
   )

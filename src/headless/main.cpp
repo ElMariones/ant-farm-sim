@@ -48,19 +48,25 @@ int main(const int argc, char** argv) {
       return 2;
     }
     std::size_t carrying_workers = 0;
+    std::size_t workers = 0;
     for (const ant::sim::ActorSnapshot& actor : world.actors()) {
-      if (actor.kind == ant::sim::AntKind::Worker && actor.cargo_amount > 0) {
-        ++carrying_workers;
+      if (actor.kind == ant::sim::AntKind::Worker) {
+        ++workers;
+        if (actor.cargo_amount > 0) ++carrying_workers;
       }
     }
     std::cout << "{\"seed\":" << options.seed << ",\"ticks\":" << world.tick() << ",\"hash\":\""
               << std::hex << std::setw(16) << std::setfill('0') << world.canonical_hash()
               << std::dec
-              << "\",\"workers\":6,\"roundTrips\":" << world.stats().completed_round_trips
+              << "\",\"workers\":" << workers << ",\"brood\":" << world.brood().size()
+              << ",\"roundTrips\":" << world.stats().completed_round_trips
               << ",\"carryingWorkers\":" << carrying_workers
               << ",\"carbohydrate\":" << world.stores().carbohydrate
               << ",\"protein\":" << world.stores().protein
-              << ",\"delivered\":" << world.stats().delivered << "}\n";
+              << ",\"delivered\":" << world.stats().delivered
+              << ",\"excavated\":" << world.stats().cells_excavated
+              << ",\"births\":" << world.stats().workers_born
+              << ",\"deaths\":" << world.stats().deaths << "}\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "ant_headless: " << error.what() << '\n';
