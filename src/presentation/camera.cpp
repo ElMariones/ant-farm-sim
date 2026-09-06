@@ -1,0 +1,108 @@
+#include "presentation/camera.hpp"
+
+#include "sim/grid.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+namespace ant::presentation {
+
+CameraController::CameraController() {
+  camera_.target = {sim::Grid::kWidth * 0.5F, sim::Grid::kHeight * 0.5F};
+  camera_.offset = {0.0F, 0.0F};
+  camera_.rotation = 0.0F;
+  camera_.zoom = 3.0F;
+}
+
+void CameraController::layout(const int screen_width, const int screen_height,
+                              const bool inspector_open) {
+  constexpr float kHeaderHeight = 64.0F;
+  constexpr float kFooterHeight = 60.0F;
+  const float inspector_width = screen_width >= 1120 && inspector_open ? 320.0F : 0.0F;
+  viewport_ = {0.0F, kHeaderHeight, static_cast<float>(screen_width) - inspector_width,
+               static_cast<float>(screen_height) - kHeaderHeight - kFooterHeight};
+  camera_.offset = {viewport_.x + viewport_.width * 0.5F, viewport_.y + viewport_.height * 0.5F};
+  clamp_target();
+}
+
+void CameraController::update(const float delta_seconds, const bool input_enabled) {
+  if (!input_enabled) {
+    return;
+  }
+
+  const Vector2 mouse = GetMousePosition();
+  if (contains(mouse) &&
+      (IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsMouseButtonDown(MOUSE_BUTTON_MIDDLE) ||
+       IsMouseButtonDown(MOUSE_BUTTON_RIGHT))) {
+    const Vector2 delta = GetMouseDelta();
+    camera_.target.x -= delta.x / camera_.zoom;
+    camera_.target.y -= delta.y / camera_.zoom;
+  }
+
+  Vector2 keyboard{};
+  if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) {
+    keyboard.x -= 1.0F;
+  }
+  if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) {
+    keyboard.x += 1.0F;
+  }
+  if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) {
+    keyboard.y -= 1.0F;
+  }
+  if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) {
+    keyboard.y += 1.0F;
+  }
+  camera_.target.x += keyboard.x * 180.0F * delta_seconds / camera_.zoom;
+  camera_.target.y += keyboard.y * 180.0F * delta_seconds / camera_.zoom;
+
+  float wheel = contains(mouse) ? GetMouseWheelMove() : 0.0F;
+  if (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD)) {
+    wheel += 1.0F;
+  }
+  if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT)) {
+    wheel -= 1.0F;
+  }
+  if (wheel != 0.0F) {
+    const Vector2 pivot = contains(mouse) ? mouse : camera_.offset;
+    const Vector2 before = GetScreenToWorld2D(pivot, camera_);
+    camera_.zoom = std::clamp(camera_.zoom * (1.0F + wheel * 0.12F), 1.5F, 12.0F);
+    const Vector2 after = GetScreenToWorld2D(pivot, camera_);
+    camera_.target.x += before.x - after.x;
+    camera_.target.y += before.y - after.y;
+  }
+  clamp_target();
+}
+
+void CameraController::set_zoom(const float zoom) {
+  camera_.zoom = std::clamp(zoom, 1.5F, 12.0F);
+  clamp_target();
+}
+
+bool CameraController::contains(const Vector2 screen_position) const {
+  return CheckCollisionPointRec(screen_position, viewport_);
+}
+
+sim::GridPos CameraController::screen_to_cell(const Vector2 screen_position) const {
+  const Vector2 world = GetScreenToWorld2D(screen_position, camera_);
+  return {static_cast<int>(std::floor(world.x)), static_cast<int>(std::floor(world.y))};
+}
+
+void CameraController::clamp_target() {
+  const float half_width = viewport_.width > 0.0F ? viewport_.width / (2.0F * camera_.zoom) : 0.0F;
+  const float half_height =
+      viewport_.height > 0.0F ? viewport_.height / (2.0F * camera_.zoom) : 0.0F;
+  if (half_width * 2.0F >= sim::Grid::kWidth) {
+    camera_.target.x = sim::Grid::kWidth * 0.5F;
+  } else {
+    camera_.target.x = std::clamp(camera_.target.x, half_width,
+                                  static_cast<float>(sim::Grid::kWidth) - half_width);
+  }
+  if (half_height * 2.0F >= sim::Grid::kHeight) {
+    camera_.target.y = sim::Grid::kHeight * 0.5F;
+  } else {
+    camera_.target.y = std::clamp(camera_.target.y, half_height,
+                                  static_cast<float>(sim::Grid::kHeight) - half_height);
+  }
+}
+
+} // namespace ant::presentation

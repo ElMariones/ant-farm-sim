@@ -1,6 +1,12 @@
 # Architecture and technology decisions
 
-All paths and APIs below are proposed contracts. Create them only when their backlog task requires them.
+The module boundaries below are active contracts. Paths required through M1 exist; later-milestone paths remain proposed and should be created only when their backlog task requires them.
+
+## Implemented through M1
+
+`ant_sim` owns the seeded 384×216 grid, PCG32 state, navigation, EnTT entities, fixed 20 Hz step, reservations, cargo, sources, stores, and accounting. `ant_game` owns the session and read-only render view. `ant_presentation` owns raylib camera/input/drawing and cannot mutate the session. `ant_persistence` currently exposes only a capability marker so planned persistence is not mistaken for a save implementation. `ant_farm` owns the real-time accumulator; `ant_headless` runs finite deterministic simulations without raylib.
+
+The M1 implementation keeps closely related code together (`world.cpp` contains the temporary guided forage systems, and `renderer.cpp` contains the first terrain/ant/HUD pass) instead of pre-creating speculative subsystem files. These split at the owning layer only when T005–T007 make the separation useful. On macOS, `app/macos_window.mm` is a narrow pre-window AppKit adapter for visible-frame sizing; it does not leak into sim, game, or presentation. Packaging an `.app` remains T016.
 
 ## Stack
 

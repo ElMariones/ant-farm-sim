@@ -20,6 +20,7 @@ Accepted design baseline, 2026-09-06. These are product/architecture decisions, 
 | D014 | No Queen age death in first release | Prevent automatic run loss during relaxed observation; starvation remains recoverable by restart |
 | D015 | Work measures productive worker time | Keeps upgrades tied to actual visible activity with integer accounting |
 | D016 | Permanent traits modify parameters, not fundamental AI access | All runs can excavate/use essential tasks; prestige should improve an existing loop |
+| D017 | Query macOS display geometry before creating the raylib window | raylib 6.0 reports physical dimensions after a post-creation resize on Retina, corrupting logical layout; the app layer may use a narrow AppKit adapter to choose one safe initial size while sim/game/presentation remain platform-independent. Pointer coordinates remain raylib-owned because live Retina checks confirmed they are already logical. The `.app` package itself remains deferred to T016 |
 
 ## Risks and resolution points
 
@@ -32,6 +33,6 @@ Accepted design baseline, 2026-09-06. These are product/architecture decisions, 
 
 ## Decisions reserved for later
 
-The owner should choose the project license and any final commercial name. Dependency pins await M0 compatibility tests. Signing/notarization and public binary release await packaging/user release intent. Music, paid assets, and model-generated art are not necessary to execute the current plan.
+The owner should choose the project license and any final commercial name. M0 dependency pins and their license records are now fixed in `docs/engineering/DEPENDENCIES.md`; changes require a new compatibility check and decision entry. Signing/notarization and public binary release await packaging/user release intent. Music, paid assets, and model-generated art are not necessary to execute the current plan.
 
 When changing an accepted decision, append a dated entry with the previous rule, new rule, rationale, affected tasks/contracts, and migration/validation consequences. Do not silently edit the archive to make history agree with the new design.

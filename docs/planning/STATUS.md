@@ -4,27 +4,25 @@ Updated: 2026-09-06.
 
 ## Current state
 
-**Planning baseline complete; implementation not started.** The repository began with one Markdown brief and no Git history. The original brief is preserved verbatim in `docs/archive/original-brief.md`. Active documents resolve its conflicting prestige, saving, and scope rules.
+**M0 and M1 are implemented.** The native raylib app and graphics-free headless runner share a deterministic C++20 simulation. Seeded terrain, queen plus six workers, bounded navigation, source reservations, visible cargo, finite/refilling sources, colony stores, pause/speed controls, camera controls, HUD, and selection inspector are present.
 
-Delivered: revised concept; full v0.1 design; art/UI layout and controls; technology and module decisions; simulation/economy/save contracts; 16 dependency-ordered tasks; validation gates; agent/contribution guidance.
+The UI uses locally bundled Nunito SemiBold at larger body/control sizes. The temporary guided forage behavior is deliberately labelled M1 and must be replaced by T005 task selection; persistence is only an explicit capability boundary and does not save yet.
 
-There is no game executable, source implementation, CMake project, CI, runtime config, generated artwork, or gameplay test result yet. Paths and APIs in ARCHITECTURE are proposed, and commands in VALIDATION are future acceptance requirements.
+## Active scope
 
-## Next ready task
-
-**T001 — Bootstrap build, libraries, and tests (M0).** Read AGENTS, the T001 entry in BACKLOG, ARCHITECTURE, and VALIDATION. Keep scope to a clean headless/desktop foundation; do not start all simulation systems in the same session.
+**Next: T005 — task selection and pheromones.** Replace guided foraging with deterministic weighted task selection and a bounded, double-buffered trail field. Do not begin excavation, brood, persistence, upgrades, or prestige as part of T005.
 
 Suggested prompt for a smaller model:
 
-> Read AGENTS.md and docs/planning/STATUS.md, then implement T001 from docs/planning/BACKLOG.md. Follow its acceptance criteria and the architecture boundaries. Inspect existing changes first. Verify actual build/test commands, update README and STATUS with evidence and limitations, and commit with the required identity and a descriptive body. Do not claim later milestones are done.
+> Read AGENTS.md and docs/planning/STATUS.md, then implement T005 from docs/planning/BACKLOG.md. Preserve the deterministic fixed-tick and physical-food invariants. Inspect existing changes first, run the documented headless and dev tests, update affected contracts and STATUS, and commit with the required identity and a descriptive body.
 
 ## Milestone state
 
 | Gate | State |
 |---|---|
 | Planning | Complete |
-| M0 Foundation | Not started |
-| M1 Watchable slice | Not started |
+| M0 Foundation | Complete — T001 |
+| M1 Watchable slice | Complete — T002–T004 |
 | M2 Living colony | Not started |
 | M3 Safe incremental slice | Not started |
 | M4 Complete generation loop | Not started |
@@ -32,14 +30,21 @@ Suggested prompt for a smaller model:
 
 ## Environment observations
 
-Observed during planning: Apple Clang 21 targeting arm64 macOS; CMake available at `/opt/homebrew/bin/cmake`; Ninja not found on PATH. Recheck before implementation; these are local observations, not portable setup requirements. No system packages were installed during planning.
+Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.4.3 using Unix Makefiles. Python fonttools 4.63 was installed to instantiate the pinned Nunito variable source at weight 650; the runtime has no Python dependency. First configure downloads pinned source dependencies; warmed headless configure/build has no graphics dependency.
 
 ## Validation of this deliverable
 
-Executed a local Python documentation audit: all local Markdown links resolve; task IDs T001–T016 exist and all referenced task IDs resolve; first five upgrade costs are 15/24/39/62/99; sample prestige payouts are 4/6/8; each Legacy branch costs 57 in total. All passed. The archived input is 29,535 bytes with SHA256 `95fdf16eb0513d758a0fb83cc59e2cc59a449c1d934ec4c4a329bf53b5430e7e`.
+Final commands and outcomes:
 
-Reviewed task dependencies for forward prerequisites and active documents for reset/payout/save consistency. Git whitespace is checked before each commit. These checks validate the plan's internal consistency only. No game build, playtest, or performance result is claimed.
+- `cmake --preset headless`, `cmake --build --preset headless`, `ctest --preset headless`: pass.
+- `cmake --preset dev`, `cmake --build --preset dev`, `ctest --preset dev`: pass.
+- `cmake --preset release`, `cmake --build --preset release`: pass.
+- Two `ant_headless --seed 42 --ticks 2400` runs produce the same canonical hash `65a6902ea73a3b27`, nine completed trips, and 9,000 delivered milli-units.
+- The headless executable links only libc++ and libSystem on macOS; its build tree does not fetch raylib.
+- Unit/scenario coverage includes bounds, 100-seed starter connectivity, terrain determinism, PCG32 reference values, budgeted A*, home-field revisions, batching determinism, topology replan, food conservation, final-unit reservation, unreachable release, and full-store cargo retention.
+- Live visual review covered the fitted 1440-wide layout, 1200×760 Retina pointer coordinates, 1024×640 minimum layout, 1.6×/3.2×/5.5×/12× readability, cursor-centered wheel zoom, paused state, and visible carrying ants. The automation bridge emits clicks too briefly for raylib's frame polling, so inspector hit-testing is supported by the corrected logical pointer coordinates and code path but remains a human-click follow-up check.
+- Review screenshots are stored outside the repository under `/tmp/ant-farm-sim-evidence/`; generated evidence and build outputs are not committed.
 
 ## Open work
 
-No blocking product question for T001. Dependency revisions need actual compatibility testing. Balancing, visual quality, save durability, and performance remain implementation work. License/name decisions can wait without blocking the first playable slice.
+No blocker for T005. Guided behavior, sparse starter art, and the temporary M1 HUD are intentionally limited. Brood, excavation, player economy, durable saves, accessibility polish, balance runs, performance claims, and `.app` packaging remain open in their scheduled milestones. No project license has been chosen.

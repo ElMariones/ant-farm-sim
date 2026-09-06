@@ -1,0 +1,31 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  headless:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Configure headless
+        run: cmake --preset headless
+      - name: Build headless
+        run: cmake --build --preset headless
+      - name: Test headless
+        run: ctest --preset headless --output-on-failure
+      - name: Prove raylib is absent
+        run: test ! -d build/headless/_deps/raylib-src
+
+  desktop-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Configure desktop
+        run: cmake --preset release
+      - name: Build desktop
+        run: cmake --build --preset release

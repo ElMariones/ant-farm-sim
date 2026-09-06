@@ -1,0 +1,67 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "headless",
+      "inherits": "base",
+      "displayName": "Headless debug",
+      "binaryDir": "${sourceDir}/build/headless",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANT_BUILD_DESKTOP": "OFF"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "displayName": "Desktop debug",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANT_BUILD_DESKTOP": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Desktop release",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANT_BUILD_DESKTOP": "ON",
+        "BUILD_TESTING": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "headless", "configurePreset": "headless", "jobs": 4 },
+    { "name": "dev", "configurePreset": "dev", "jobs": 4 },
+    { "name": "release", "configurePreset": "release", "jobs": 4 }
+  ],
+  "testPresets": [
+    {
+      "name": "headless",
+      "configurePreset": "headless",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

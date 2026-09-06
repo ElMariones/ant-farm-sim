@@ -2,7 +2,7 @@
 
 A desktop incremental game about nurturing an autonomous ant colony: watch tunnels grow, improve the colony's habits, and send a new generation into the world.
 
-**Status: design and planning only. No playable application, build system, or game tests exist yet.** This repository currently contains the implementation specification for the first playable version. It does not claim benchmark or playtest results.
+**Status: M0 and M1 complete.** The repository now builds a deterministic, watchable colony slice: a queen and six workers navigate seeded terrain, reserve finite food, visibly carry it home, and credit the colony store exactly once. Brood, excavation, progression, and saving begin in later milestones.
 
 ## Start here
 
@@ -20,11 +20,38 @@ A desktop incremental game about nurturing an autonomous ant colony: watch tunne
 - [Decision log](docs/planning/DECISIONS.md): rationale and deferred features.
 - [Session handoff](docs/planning/HANDOFF_TEMPLATE.md): reusable implementation-session checklist.
 
-The planned stack is **C++20, raylib, EnTT, CMake, Catch2, and nlohmann/json**. macOS on Apple Silicon is the first development target; portable headless builds are part of the architecture. Dependency versions are selected and pinned during the initial build milestone, not assumed compatible from this document.
+The implemented stack is **C++20, raylib, EnTT, CMake, Catch2, and nlohmann/json**. macOS on Apple Silicon is the first development target; the headless simulation target has no raylib dependency. Exact versions, revisions, hashes, and licenses are recorded in [DEPENDENCIES.md](docs/engineering/DEPENDENCIES.md).
 
 ## Build and play
 
-Not available yet. Begin with **M0 / T001** in the backlog. That task must add and verify the documented build presets before runnable commands are advertised here.
+Requirements: CMake 3.25+, a C++20 compiler, Git, and network access for the first configure. The tested macOS generator is Unix Makefiles, so Ninja is optional.
+
+```sh
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
+./build/dev/ant_farm --seed 42
+```
+
+The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/2×/5× speed. It uses the bundled Nunito SemiBold face for larger, stronger UI copy. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
+
+For simulation-only work:
+
+```sh
+cmake --preset headless
+cmake --build --preset headless
+ctest --preset headless
+./build/headless/ant_headless --seed 42 --ticks 2400
+```
+
+For an optimized build:
+
+```sh
+cmake --preset release
+cmake --build --preset release
+```
+
+Diagnostic desktop arguments include `--width`, `--height`, `--zoom`, `--fast-forward`, `--start-paused`, `--screenshot`, `--exit-after-screenshot`, `--fps`, and `--display-metrics`. Generated builds and screenshots are not source artifacts.
 
 ## Scope of the first release
 
