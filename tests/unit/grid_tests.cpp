@@ -27,3 +27,29 @@ TEST_CASE("terrain material layout is deterministic by seed", "[terrain]") {
   CHECK(first.source_positions == second.source_positions);
   CHECK(first.grid.material_hash() != other.grid.material_hash());
 }
+
+
+TEST_CASE("terrain revision changes on any material edit", "[grid]") {
+  // The renderer caches baked terrain against this value, so it has to move even when passability
+  // does not — otherwise a dug cell would keep drawing as solid ground.
+  ant::sim::Grid grid(ant::sim::Material::Soil);
+  const std::uint64_t initial = grid.terrain_revision();
+
+  grid.set({4, 4}, ant::sim::Material::Clay);
+  const std::uint64_t after_clay = grid.terrain_revision();
+  CHECK(after_clay != initial);
+  // Clay and soil are both impassable, so navigation is unchanged while terrain is not.
+  CHECK(grid.navigation_revision() == 1);
+
+  grid.set({4, 4}, ant::sim::Material::Clay);
+  CHECK(grid.terrain_revision() == after_clay);
+
+  grid.set({4, 4}, ant::sim::Material::Air);
+  CHECK(grid.terrain_revision() != after_clay);
+  CHECK(grid.navigation_revision() == 2);
+
+  // An edit in a different chunk also moves it.
+  const std::uint64_t before_far = grid.terrain_revision();
+  grid.set({200, 100}, ant::sim::Material::Air);
+  CHECK(grid.terrain_revision() != before_far);
+}
