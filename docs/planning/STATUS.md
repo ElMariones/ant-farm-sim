@@ -84,6 +84,20 @@ Four real bugs surfaced by pushing further than M3 did:
 
 The profile schema is **version 2**, with a tested in-memory v1 migration that fills castes, traits, the maturity latch and the flight receipt, and keeps the migrated colony's canonical hash.
 
+### Presentation upgrade (visual slice of T014)
+
+Ant art and the overall diorama were reworked; the rest of T014 (final layout, onboarding, accessibility) is untouched.
+
+- **Ants are drawn along a real heading** taken from their travel, so they face where they are going instead of always pointing left. A stopped ant keeps its last heading, and one that has never moved gets a stable heading from its id.
+- Three zoom tiers as ART_AND_UX specifies: a dot with a cargo accent below zoom 2.6, a segmented silhouette from 2.6, and legs with an alternating tripod gait, elbowed antennae, mandibles and eyes from 5.5. Limbs are drawn a shade darker than the body so they read as legs.
+- **Winged queens now look like winged queens** — two translucent swept wings, sized between worker and queen. They were previously indistinguishable from workers, which was a gap left by M4.
+- Cargo is carried at the mandibles rather than floating above the head, and spoil and corpse loads are drawn, not just food.
+- Chitin is warm brown rather than UI ink, so ants read against the near-black tunnel.
+- **Terrain is baked into a texture** at three texels per cell, rebuilt only when a cell is dug. This replaced about 80,000 rectangle draws per frame and paid for sparse flecks, a depth gradient, and lit and shadowed edges that make a tunnel look carved. Grass became clumps of leaning blades; the nursery became a soft hollow instead of a drawn-on ring.
+- **The camera now opens on the colony** instead of the geometric centre of the map, which was bare subsoil.
+
+Two defects were found and fixed during this work: every ant body segment was invisible because `DrawTriangleFan` needs counter-clockwise winding and screen Y points down, so a positive parametric sweep culled every segment; and the heading cache could grow for the life of a session, so it is now bounded.
+
 ### Visual review
 
 Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. The flight panel shows the readiness checklist with per-condition progress, the exact payout with its birth and queen components, and the next threshold computed from the rules. The between-colonies panel shows both trait branches with tier, cost and effect summary, and the found-next-colony action. A staged between-runs profile was opened in the real app and its exit save preserved `phase: BetweenRuns` with the receipt intact and no invented run. One layout defect was found and fixed: the focus buttons overlapped the excavation line, and the bottleneck line ran into the footer at the minimum height.
@@ -92,6 +106,7 @@ Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. 
 
 No blocker for T014.
 
+- **The surface view was not re-photographed after the final art pass.** The window server stopped accepting new windows partway through review (`GLFW: Failed to determine Monitor to center Window`), so the last captures are of the nursery at zoom 11, which does show the reworked ants, brood, queen and terrain. The surface, food sources and foraging column at mid zoom were reviewed before the final colour and limb-tone tweaks but not after them.
 - **Keyboard activation was not exercised interactively.** The flight, trait and found-colony key handlers were verified through unit tests against a real `SaveService` and their panels were rendered and photographed, but this session had no way to send key presses to the raylib window. The same limitation applies to the recovery prompt's `R`/`N` keys from M3.
 - **Excavation task selection is O(workers²) per tick.** Each excavating worker scans every worker to count frontier claims, costing about 22 ms per tick at 159 workers in a Debug build. This dominates test runtimes and is the first thing T015 should measure.
 - Industry I has no metric that improves; payouts of 6 and 8 are verified arithmetically but not reached in a measured run. Both are recorded in the balance report.

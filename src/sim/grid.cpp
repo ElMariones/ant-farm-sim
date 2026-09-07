@@ -39,6 +39,12 @@ void Grid::set(const GridPos position, const Material material) {
   }
 }
 
+std::uint64_t Grid::terrain_revision() const {
+  std::uint64_t total = 0;
+  for (const std::uint64_t revision : chunk_revisions_) total += revision;
+  return total;
+}
+
 std::uint64_t Grid::chunk_revision(const int chunk_x, const int chunk_y) const {
   if (chunk_x < 0 || chunk_x >= kChunkColumns || chunk_y < 0 || chunk_y >= kChunkRows) {
     throw std::out_of_range("chunk position out of bounds");

@@ -56,6 +56,8 @@ struct GameView {
   std::array<std::int64_t, 4> upgrade_costs{};
   Bottleneck bottleneck{Bottleneck::None};
   LegacyView legacy;
+  // Changes only when a cell is dug, so the renderer can cache the baked ground.
+  std::uint64_t terrain_revision{};
 };
 
 [[nodiscard]] GameView make_view(const Session& session);

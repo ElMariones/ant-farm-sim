@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace ant::presentation {
 
@@ -40,9 +41,12 @@ public:
   void set_recovery_prompt(bool prompt) { recovery_prompt_ = prompt; }
   void open_legacy_panel() { legacy_panel_open_ = true; }
   void set_zoom(float zoom) { camera_.set_zoom(zoom); }
+  void focus(sim::GridPos cell) { camera_.focus(cell); }
 
 private:
   void draw_world(const game::GameView& view, double interpolation_alpha);
+  void refresh_terrain_texture(const game::GameView& view);
+  [[nodiscard]] float heading_for(const sim::ActorSnapshot& actor, float dx, float dy);
   void draw_ant(const sim::ActorSnapshot& actor, double interpolation_alpha, float zoom,
                 bool selected);
   void draw_interface(const game::GameView& view, bool paused, int speed, bool simulation_limited);
@@ -58,6 +62,13 @@ private:
   CameraController camera_;
   Font font_{};
   bool font_loaded_{};
+  // The ground only changes when a cell is dug, so it is baked once into a texture instead of
+  // eighty thousand rectangles per frame. That budget pays for the grain and carved edges.
+  Texture2D terrain_texture_{};
+  bool terrain_texture_ready_{};
+  std::uint64_t terrain_revision_{};
+  // Ants keep facing where they were last going, so a stopped ant does not snap to a default.
+  std::unordered_map<sim::EntityId, float> heading_;
   std::optional<sim::EntityId> selected_id_;
   bool inspector_open_{true};
   bool toggle_pause_requested_{};

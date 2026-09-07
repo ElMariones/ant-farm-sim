@@ -25,6 +25,7 @@ GameView make_view(const Session& session) {
     view.upgrade_costs[index] = session.next_upgrade_cost(static_cast<UpgradeId>(index));
   }
   view.bottleneck = bottleneck;
+  view.terrain_revision = world.grid().terrain_revision();
   view.legacy.flight = preview_flight(session);
   return view;
 }

@@ -3,6 +3,7 @@
 #include "sim/grid.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -27,6 +28,61 @@ constexpr Color kSelection{152, 203, 195, 255};
 constexpr Color kPaperSoft{246, 239, 220, 255};
 constexpr Color kMutedInk{85, 91, 84, 255};
 constexpr Color kWarmLine{193, 176, 143, 255};
+
+// Ants read as warm dark chitin rather than UI ink, with a sheen so the segments separate.
+constexpr Color kChitin{74, 55, 40, 255};
+constexpr Color kChitinSheen{126, 98, 72, 255};
+constexpr Color kQueenChitin{88, 57, 47, 255};
+constexpr Color kWing{206, 220, 216, 120};
+
+// Each terrain cell becomes a 3x3 patch of texels, which is what makes grain and carved tunnel
+// edges possible at close zoom without a per-frame cost.
+constexpr int kTerrainDetail = 3;
+
+std::uint64_t hash_pixel(const int x, const int y, const std::uint64_t seed) {
+  std::uint64_t value = static_cast<std::uint64_t>(x) * 73856093ULL ^
+                        static_cast<std::uint64_t>(y) * 19349663ULL ^ seed * 83492791ULL;
+  value ^= value >> 29U;
+  value *= 0xBF58476D1CE4E5B9ULL;
+  value ^= value >> 32U;
+  return value;
+}
+
+// A rotated ellipse, which raylib has no primitive for. Fourteen points is smooth at the zoom
+// levels where a body segment is actually visible.
+void draw_oriented_ellipse(const Vector2 center, const float along, const float across,
+                           const float heading, const Color color) {
+  constexpr int kPoints = 14;
+  const float cos_h = std::cos(heading);
+  const float sin_h = std::sin(heading);
+  std::array<Vector2, kPoints + 2> fan{};
+  fan[0] = center;
+  for (int index = 0; index <= kPoints; ++index) {
+    // Negative sweep: raylib wants counter-clockwise winding, and screen Y points down, so a
+    // positive parametric sweep would wind the wrong way and every segment would be culled.
+    const float angle = -static_cast<float>(index) * 2.0F * PI / static_cast<float>(kPoints);
+    const float local_x = std::cos(angle) * along;
+    const float local_y = std::sin(angle) * across;
+    fan[static_cast<std::size_t>(index) + 1] = {center.x + local_x * cos_h - local_y * sin_h,
+                                                center.y + local_x * sin_h + local_y * cos_h};
+  }
+  // raylib's triangle fan needs counter-clockwise winding in screen space.
+  DrawTriangleFan(fan.data(), static_cast<int>(fan.size()), color);
+}
+
+Vector2 offset_along(const Vector2 origin, const float heading, const float along,
+                     const float across) {
+  const float cos_h = std::cos(heading);
+  const float sin_h = std::sin(heading);
+  return {origin.x + along * cos_h - across * sin_h, origin.y + along * sin_h + across * cos_h};
+}
+
+Color shade(const Color base, const int delta) {
+  return {static_cast<unsigned char>(std::clamp(static_cast<int>(base.r) + delta, 0, 255)),
+          static_cast<unsigned char>(std::clamp(static_cast<int>(base.g) + delta, 0, 255)),
+          static_cast<unsigned char>(std::clamp(static_cast<int>(base.b) + delta, 0, 255)),
+          base.a};
+}
 
 Color material_color(const sim::Material material, const int x, const int y,
                      const std::uint64_t seed) {
@@ -90,6 +146,9 @@ Renderer::Renderer() {
 Renderer::~Renderer() {
   if (font_loaded_) {
     UnloadFont(font_);
+  }
+  if (terrain_texture_ready_) {
+    UnloadTexture(terrain_texture_);
   }
 }
 
@@ -338,27 +397,98 @@ void Renderer::draw_recovery_prompt() const {
   }
 }
 
-void Renderer::draw_world(const game::GameView& view, const double interpolation_alpha) {
-  BeginMode2D(camera_.camera());
+void Renderer::refresh_terrain_texture(const game::GameView& view) {
+  if (terrain_texture_ready_ && terrain_revision_ == view.terrain_revision) return;
 
-  for (int y = 0; y < view.grid_height; ++y) {
-    for (int x = 0; x < view.grid_width; ++x) {
-      const std::size_t index = static_cast<std::size_t>(y * view.grid_width + x);
-      DrawRectangle(x, y, 1, 1, material_color(view.terrain[index], x, y, view.seed));
+  const int width = view.grid_width * kTerrainDetail;
+  const int height = view.grid_height * kTerrainDetail;
+  Image image = GenImageColor(width, height, kSky);
+  auto* pixels = static_cast<Color*>(image.data);
+
+  const auto material_at = [&view](const int x, const int y) {
+    if (x < 0 || y < 0 || x >= view.grid_width || y >= view.grid_height) return sim::Material::Bedrock;
+    return view.terrain[static_cast<std::size_t>(y * view.grid_width + x)];
+  };
+
+  for (int cell_y = 0; cell_y < view.grid_height; ++cell_y) {
+    // Deeper ground is cooler and darker, so the cross-section reads as depth rather than a flat wall.
+    const float depth = std::clamp(static_cast<float>(cell_y - 32) / 170.0F, 0.0F, 1.0F);
+    const int depth_shade = -static_cast<int>(depth * 26.0F);
+    for (int cell_x = 0; cell_x < view.grid_width; ++cell_x) {
+      const sim::Material material = material_at(cell_x, cell_y);
+      const bool solid = material != sim::Material::Sky && material != sim::Material::Air;
+      const bool open_above = !solid && material_at(cell_x, cell_y - 1) != material;
+      const bool lit = solid && (material_at(cell_x, cell_y - 1) == sim::Material::Air ||
+                                 material_at(cell_x, cell_y - 1) == sim::Material::Sky);
+      const bool shadowed = solid && material_at(cell_x, cell_y + 1) == sim::Material::Air;
+
+      for (int sub_y = 0; sub_y < kTerrainDetail; ++sub_y) {
+        for (int sub_x = 0; sub_x < kTerrainDetail; ++sub_x) {
+          const int px = cell_x * kTerrainDetail + sub_x;
+          const int py = cell_y * kTerrainDetail + sub_y;
+          Color color = material_color(material, cell_x, cell_y, view.seed);
+          if (solid) {
+            const std::uint64_t noise = hash_pixel(px, py, view.seed);
+            // Sparse flecks rather than uniform static, so the soil has grain without fizzing.
+            const int grain = (noise % 23ULL) == 0 ? 16 : ((noise >> 8U) % 17ULL) == 0 ? -13
+                                                                                      : (static_cast<int>((noise >> 16U) % 7ULL) - 3);
+            color = shade(color, grain + depth_shade);
+            if (lit && sub_y == 0) color = shade(color, 22);
+            if (shadowed && sub_y == kTerrainDetail - 1) color = shade(color, -16);
+          } else if (material == sim::Material::Air) {
+            color = shade(kTunnel, open_above && sub_y == 0 ? 10 : 0);
+          } else {
+            // A calm sky band that lifts slightly toward the top of the frame.
+            color = shade(kSky, static_cast<int>((1.0F - static_cast<float>(py) / 96.0F) * 10.0F));
+          }
+          pixels[static_cast<std::size_t>(py) * static_cast<std::size_t>(width) +
+                 static_cast<std::size_t>(px)] = color;
+        }
+      }
     }
   }
 
-  for (int x = 0; x < view.grid_width; x += 3) {
-    const float height =
-        0.8F + static_cast<float>((x * 17 + static_cast<int>(view.seed)) % 4) * 0.25F;
-    DrawLineEx({static_cast<float>(x), 32.0F}, {static_cast<float>(x) + 0.3F, 32.0F - height},
-               0.35F, kFoliage);
+  if (terrain_texture_ready_) UnloadTexture(terrain_texture_);
+  terrain_texture_ = LoadTextureFromImage(image);
+  SetTextureFilter(terrain_texture_, TEXTURE_FILTER_POINT);
+  UnloadImage(image);
+  terrain_texture_ready_ = true;
+  terrain_revision_ = view.terrain_revision;
+}
+
+void Renderer::draw_world(const game::GameView& view, const double interpolation_alpha) {
+  refresh_terrain_texture(view);
+  BeginMode2D(camera_.camera());
+
+  if (terrain_texture_ready_) {
+    DrawTexturePro(terrain_texture_,
+                   {0.0F, 0.0F, static_cast<float>(terrain_texture_.width),
+                    static_cast<float>(terrain_texture_.height)},
+                   {0.0F, 0.0F, static_cast<float>(view.grid_width),
+                    static_cast<float>(view.grid_height)},
+                   {0.0F, 0.0F}, 0.0F, WHITE);
   }
 
-  DrawCircleV({static_cast<float>(view.home.x) + 0.5F, static_cast<float>(view.home.y) + 0.5F},
-              3.5F, Color{74, 62, 48, 255});
-  DrawCircleLinesV({static_cast<float>(view.home.x) + 0.5F, static_cast<float>(view.home.y) + 0.5F},
-                   4.2F, kBrood);
+  // Grass tufts: a few blades per clump, leaning and varying in tone.
+  for (int x = 0; x < view.grid_width; ++x) {
+    const std::uint64_t noise = hash_pixel(x, 3, view.seed);
+    if (noise % 3ULL != 0) continue;
+    const int blades = 2 + static_cast<int>((noise >> 6U) % 3ULL);
+    for (int blade = 0; blade < blades; ++blade) {
+      const float offset = static_cast<float>((noise >> (8U + 3U * static_cast<unsigned>(blade))) % 9ULL) * 0.1F;
+      const float height = 0.9F + static_cast<float>((noise >> (5U + static_cast<unsigned>(blade))) % 6ULL) * 0.22F;
+      const float lean = (static_cast<float>((noise >> (11U + static_cast<unsigned>(blade))) % 7ULL) - 3.0F) * 0.14F;
+      const Color tone = shade(kFoliage, static_cast<int>((noise >> (13U + static_cast<unsigned>(blade))) % 25ULL) - 12);
+      DrawLineEx({static_cast<float>(x) + offset, 32.0F},
+                 {static_cast<float>(x) + offset + lean, 32.0F - height}, 0.28F, tone);
+    }
+  }
+
+  // The nursery reads as a softly lit hollow rather than a drawn-on marker.
+  const Vector2 nest{static_cast<float>(view.home.x) + 0.5F, static_cast<float>(view.home.y) + 0.5F};
+  for (int ring = 4; ring >= 1; --ring) {
+    DrawCircleV(nest, 1.6F * static_cast<float>(ring), Fade(Color{92, 74, 54, 255}, 0.06F));
+  }
 
   for (const sim::FoodSource& source : view.sources) {
     const Color color = source.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
@@ -376,13 +506,18 @@ void Renderer::draw_world(const game::GameView& view, const double interpolation
   for (const sim::BroodSnapshot& brood : view.brood) {
     const Vector2 center{static_cast<float>(brood.position.x) + 0.5F,
                          static_cast<float>(brood.position.y) + 0.5F};
+    const Color shell = brood.role == sim::BroodRole::Gyne ? Color{226, 214, 232, 255} : kBrood;
+    DrawCircleV({center.x + 0.1F, center.y + 0.14F}, 0.62F, Fade(BLACK, 0.28F));
     if (brood.stage == sim::BroodStage::Egg) {
-      DrawEllipse(static_cast<int>(center.x), static_cast<int>(center.y), 0.45F, 0.7F, kBrood);
+      draw_oriented_ellipse(center, 0.34F, 0.24F, 0.5F, shell);
     } else if (brood.stage == sim::BroodStage::Larva) {
-      DrawCircleV(center, 0.75F, kBrood);
-      DrawCircleV({center.x + 0.65F, center.y + 0.1F}, 0.52F, kBrood);
+      draw_oriented_ellipse(center, 0.62F, 0.34F, 0.35F, shell);
+      draw_oriented_ellipse({center.x - 0.28F, center.y - 0.1F}, 0.26F, 0.22F, 0.35F,
+                            shade(shell, -18));
     } else {
-      DrawEllipse(static_cast<int>(center.x), static_cast<int>(center.y), 0.75F, 1.15F, kBrood);
+      draw_oriented_ellipse(center, 0.72F, 0.4F, 0.2F, shell);
+      DrawLineEx({center.x - 0.3F, center.y - 0.22F}, {center.x + 0.35F, center.y - 0.12F}, 0.1F,
+                 shade(shell, -30));
     }
   }
 
@@ -408,6 +543,10 @@ void Renderer::draw_world(const game::GameView& view, const double interpolation
     DrawEllipse(view.home.x + 10, 31, mound, mound * 0.35F, Color{126, 91, 58, 255});
   }
 
+  // Dead ants never reuse an id, so the heading cache would creep upward over a long session.
+  // Dropping it wholesale is safe: a moving ant re-derives its heading on the very next frame.
+  if (heading_.size() > view.actors.size() * 4 + 64) heading_.clear();
+
   for (const sim::ActorSnapshot& actor : view.actors) {
     if (actor.kind == sim::AntKind::Queen && !view.queen_alive) {
       continue;
@@ -418,6 +557,22 @@ void Renderer::draw_world(const game::GameView& view, const double interpolation
   EndMode2D();
 }
 
+float Renderer::heading_for(const sim::ActorSnapshot& actor, const float dx, const float dy) {
+  const float travelled = dx * dx + dy * dy;
+  auto stored = heading_.find(actor.id);
+  if (travelled > 1e-6F) {
+    const float heading = std::atan2(dy, dx);
+    if (stored == heading_.end()) heading_.emplace(actor.id, heading);
+    else stored->second = heading;
+    return heading;
+  }
+  if (stored != heading_.end()) return stored->second;
+  // A never-moved ant still faces somewhere definite, and always the same somewhere.
+  const float heading = static_cast<float>(actor.id % 16ULL) * (2.0F * PI / 16.0F);
+  heading_.emplace(actor.id, heading);
+  return heading;
+}
+
 void Renderer::draw_ant(const sim::ActorSnapshot& actor, const double interpolation_alpha,
                         const float zoom, const bool selected) {
   const float alpha = static_cast<float>(std::clamp(interpolation_alpha, 0.0, 1.0));
@@ -425,34 +580,121 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const double interpolat
   float y = static_cast<float>(actor.previous_y + (actor.y - actor.previous_y) * alpha);
   x += static_cast<float>(static_cast<int>((actor.id * 17ULL) % 7ULL) - 3) * 0.09F;
   y += static_cast<float>(static_cast<int>((actor.id * 11ULL) % 5ULL) - 2) * 0.08F;
-  const float scale = actor.kind == sim::AntKind::Queen ? 1.85F : 1.0F;
+
+  const float heading = heading_for(actor, static_cast<float>(actor.x - actor.previous_x),
+                                    static_cast<float>(actor.y - actor.previous_y));
+  const bool winged = actor.kind == sim::AntKind::WingedQueen;
+  const bool royal = actor.kind == sim::AntKind::Queen;
+  const float scale = royal ? 2.0F : winged ? 1.45F : 1.0F;
+  const Color body = royal || winged ? kQueenChitin : kChitin;
+  const Vector2 centre{x, y};
 
   if (selected) {
-    DrawCircleLinesV({x, y}, 2.7F * scale, kSelection);
+    DrawCircleLinesV(centre, 2.8F * scale, kSelection);
+    DrawCircleLinesV(centre, 2.5F * scale, Fade(kSelection, 0.45F));
   }
+
+  // Far out an ant is a moving dot; the cargo accent is what stays readable.
   if (zoom < 2.6F) {
-    DrawCircleV({x, y}, 0.85F * scale, kInk);
-  } else {
-    DrawCircleV({x - 0.8F * scale, y}, 0.55F * scale, kInk);
-    DrawCircleV({x, y}, 0.48F * scale, kInk);
-    DrawEllipse(static_cast<int>(x + 0.9F * scale), static_cast<int>(y), 0.85F * scale,
-                0.62F * scale, kInk);
-    if (zoom >= 5.5F && actor.kind == sim::AntKind::Worker) {
-      for (int leg = -1; leg <= 1; ++leg) {
-        const float leg_x = x + static_cast<float>(leg) * 0.35F;
-        DrawLineEx({leg_x, y}, {leg_x - 0.8F, y - 1.0F}, 0.12F, kInk);
-        DrawLineEx({leg_x, y}, {leg_x + 0.8F, y + 1.0F}, 0.12F, kInk);
+    DrawCircleV(centre, 0.8F * scale, body);
+    if (actor.cargo_amount > 0 && actor.cargo_kind == sim::CargoKind::Food) {
+      DrawCircleV(offset_along(centre, heading, 0.9F * scale, 0.0F), 0.45F * scale,
+                  actor.cargo_nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein);
+    }
+    return;
+  }
+
+  const bool detailed = zoom >= 5.5F;
+  const Vector2 gaster = offset_along(centre, heading, -0.95F * scale, 0.0F);
+  const Vector2 thorax = offset_along(centre, heading, 0.05F * scale, 0.0F);
+  const Vector2 head = offset_along(centre, heading, 0.85F * scale, 0.0F);
+
+  if (detailed) {
+    // Alternating tripod gait, phased per ant so a column does not march in lockstep.
+    const float phase = static_cast<float>(GetTime()) * 7.0F +
+                        static_cast<float>(actor.id % 13ULL) * 0.48F;
+    for (int leg = 0; leg < 3; ++leg) {
+      const float root_along = (0.45F - static_cast<float>(leg) * 0.42F) * scale;
+      for (int side = -1; side <= 1; side += 2) {
+        const float swing =
+            std::sin(phase + ((leg + (side > 0 ? 1 : 0)) % 2 == 0 ? 0.0F : PI)) * 0.34F * scale;
+        const Vector2 root = offset_along(centre, heading, root_along, 0.22F * scale * static_cast<float>(side));
+        const Vector2 knee = offset_along(centre, heading, root_along + swing * 0.6F,
+                                          0.85F * scale * static_cast<float>(side));
+        const Vector2 foot = offset_along(centre, heading, root_along + swing,
+                                          1.35F * scale * static_cast<float>(side));
+        const Color limb = shade(body, -20);
+        DrawLineEx(root, knee, 0.11F * scale, limb);
+        DrawLineEx(knee, foot, 0.09F * scale, limb);
       }
     }
   }
 
+  if (winged) {
+    // Two long wings swept back over the gaster, translucent so the body still reads.
+    for (int side = -1; side <= 1; side += 2) {
+      const Vector2 wing = offset_along(centre, heading, -0.7F * scale, 0.85F * scale * static_cast<float>(side));
+      draw_oriented_ellipse(wing, 1.5F * scale, 0.42F * scale,
+                            heading + 0.42F * static_cast<float>(side), kWing);
+    }
+  }
+
+  draw_oriented_ellipse(gaster, 0.82F * scale, 0.6F * scale, heading, body);
+  draw_oriented_ellipse(offset_along(gaster, heading, -0.06F * scale, -0.12F * scale),
+                        0.5F * scale, 0.26F * scale, heading, shade(body, 26));
+  // Petiole: the waist that makes it an ant rather than a beetle.
+  DrawLineEx(offset_along(centre, heading, -0.42F * scale, 0.0F),
+             offset_along(centre, heading, -0.2F * scale, 0.0F), 0.2F * scale, body);
+  draw_oriented_ellipse(thorax, 0.52F * scale, 0.38F * scale, heading, body);
+  draw_oriented_ellipse(offset_along(thorax, heading, 0.05F * scale, -0.1F * scale), 0.3F * scale,
+                        0.16F * scale, heading, shade(body, 30));
+  draw_oriented_ellipse(head, 0.42F * scale, 0.4F * scale, heading, body);
+
+  if (detailed) {
+    for (int side = -1; side <= 1; side += 2) {
+      const Vector2 base = offset_along(head, heading, 0.25F * scale, 0.16F * scale * static_cast<float>(side));
+      const Vector2 elbow = offset_along(head, heading, 0.75F * scale, 0.5F * scale * static_cast<float>(side));
+      const Vector2 tip = offset_along(head, heading, 1.15F * scale, 0.42F * scale * static_cast<float>(side));
+      DrawLineEx(base, elbow, 0.09F * scale, shade(body, -20));
+      DrawLineEx(elbow, tip, 0.08F * scale, shade(body, -20));
+    }
+    // Mandibles.
+    for (int side = -1; side <= 1; side += 2) {
+      DrawLineEx(offset_along(head, heading, 0.3F * scale, 0.2F * scale * static_cast<float>(side)),
+                 offset_along(head, heading, 0.62F * scale, 0.1F * scale * static_cast<float>(side)),
+                 0.1F * scale, shade(body, 18));
+    }
+    DrawCircleV(offset_along(head, heading, 0.16F * scale, 0.24F * scale), 0.09F * scale,
+                kChitinSheen);
+    DrawCircleV(offset_along(head, heading, 0.16F * scale, -0.24F * scale), 0.09F * scale,
+                kChitinSheen);
+  }
+
+  // Cargo is carried at the mandibles, in front of the head, not floating overhead.
   if (actor.cargo_amount > 0) {
-    const Color cargo_color =
-        actor.cargo_nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
-    if (actor.cargo_nutrient == sim::Nutrient::Carbohydrate) {
-      DrawCircleV({x, y - 1.45F * scale}, 0.55F, cargo_color);
-    } else {
-      DrawPoly({x, y - 1.45F * scale}, 4, 0.65F, 45.0F, cargo_color);
+    const Vector2 held = offset_along(head, heading, 0.62F * scale, 0.0F);
+    switch (actor.cargo_kind) {
+    case sim::CargoKind::Food: {
+      const Color cargo_color =
+          actor.cargo_nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
+      if (actor.cargo_nutrient == sim::Nutrient::Carbohydrate) {
+        DrawCircleV(held, 0.5F * scale, cargo_color);
+        DrawCircleV(offset_along(held, heading, 0.12F * scale, -0.12F * scale), 0.18F * scale,
+                    shade(cargo_color, 30));
+      } else {
+        DrawPoly(held, 4, 0.58F * scale, heading * RAD2DEG + 45.0F, cargo_color);
+      }
+      break;
+    }
+    case sim::CargoKind::Spoil:
+      DrawPoly(held, 6, 0.5F * scale, heading * RAD2DEG, Color{126, 91, 58, 255});
+      DrawPolyLines(held, 6, 0.52F * scale, heading * RAD2DEG, Color{96, 68, 44, 255});
+      break;
+    case sim::CargoKind::Corpse:
+      draw_oriented_ellipse(held, 0.55F * scale, 0.32F * scale, heading, Color{124, 102, 82, 255});
+      break;
+    case sim::CargoKind::None:
+      break;
     }
   }
 }

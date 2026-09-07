@@ -13,6 +13,8 @@ public:
   void layout(int screen_width, int screen_height, bool inspector_open);
   void update(float delta_seconds, bool input_enabled);
   void set_zoom(float zoom);
+  // Centres the view on a cell, so the game opens looking at the colony rather than at subsoil.
+  void focus(sim::GridPos cell);
 
   [[nodiscard]] const Camera2D& camera() const { return camera_; }
   [[nodiscard]] Rectangle viewport() const { return viewport_; }

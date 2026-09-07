@@ -27,6 +27,9 @@ public:
 
   [[nodiscard]] std::uint64_t navigation_revision() const { return navigation_revision_; }
   [[nodiscard]] std::uint64_t chunk_revision(int chunk_x, int chunk_y) const;
+  // Changes on any material edit, including one that does not affect passability. Lets a renderer
+  // cache terrain and rebuild it only when the ground actually changed.
+  [[nodiscard]] std::uint64_t terrain_revision() const;
   [[nodiscard]] const std::vector<Material>& cells() const { return cells_; }
   [[nodiscard]] std::uint64_t material_hash() const;
 

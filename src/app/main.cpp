@@ -259,6 +259,7 @@ int main(const int argc, char** argv) {
 
     ant::presentation::Renderer renderer;
     renderer.set_zoom(options.zoom);
+    renderer.focus(session->world().home());
     if (options.open_legacy_panel) renderer.open_legacy_panel();
     bool paused = options.start_paused || recovery_prompt || between_runs;
     double accumulator = 0.0;

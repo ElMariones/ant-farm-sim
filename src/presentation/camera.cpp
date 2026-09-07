@@ -87,6 +87,11 @@ sim::GridPos CameraController::screen_to_cell(const Vector2 screen_position) con
   return {static_cast<int>(std::floor(world.x)), static_cast<int>(std::floor(world.y))};
 }
 
+void CameraController::focus(const sim::GridPos cell) {
+  camera_.target = {static_cast<float>(cell.x) + 0.5F, static_cast<float>(cell.y) + 0.5F};
+  clamp_target();
+}
+
 void CameraController::clamp_target() {
   const float half_width = viewport_.width > 0.0F ? viewport_.width / (2.0F * camera_.zoom) : 0.0F;
   const float half_height =

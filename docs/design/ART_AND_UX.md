@@ -22,9 +22,13 @@ Use procedural primitives and a tiny original sprite atlas first. No external im
 | Brood | `#EADBC0` | Eggs, curved larvae, larger pupae |
 | Selected / Legacy | `#98CBC3` | Outline / wing motif |
 
+Terrain is baked once into a texture at three texels per cell and rebuilt only when a cell is dug, which replaced roughly eighty thousand rectangle draws per frame. That budget pays for sparse flecks, a depth gradient that cools and darkens with depth, a lit top edge on soil under open air and a shadowed edge above it, so a tunnel reads as carved rather than painted on. Grass is drawn as clumps of leaning blades in varied tones. The nursery is a soft warm hollow, not a drawn-on marker.
+
 These are art tokens, not verified contrast ratios. Verify actual UI text/background pairs in T014; use darker ink or lighter panel surfaces as needed. Never encode shortage or selection by hue alone.
 
 Worker sprites should show head/thorax/abdomen and legs at close zoom; draw a clean ant silhouette at middle zoom and a moving dot with cargo accent at far zoom. The queen is approximately 2x worker length. Selection uses an outline and label. Avoid drawing every leg at all distances.
+
+**Implemented.** Ants are built from oriented segments along a heading derived from actual travel, so an ant walking right faces right; a stopped ant keeps the heading it last had. Below zoom 2.6 an ant is a dot with its cargo accent; from 2.6 it gains gaster, petiole, thorax and head with a lighter sheen along the top; from 5.5 it gains a six-legged alternating tripod gait, elbowed antennae, mandibles and eyes, with limbs a shade darker than the body so they read as legs. Winged queens carry two translucent swept wings and sit between worker and queen in size. Cargo is held at the mandibles rather than floating overhead, and spoil and corpses are drawn as well as food. Chitin is warm brown rather than UI ink so an ant reads against the near-black tunnel.
 
 ## Desktop layout
 
