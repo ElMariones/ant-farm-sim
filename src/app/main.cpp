@@ -30,8 +30,8 @@ struct Options {
   int width{1440};
   int height{900};
   ant::sim::Tick fast_forward{};
-  // Opens close enough that ants read as ants rather than specks.
-  float zoom{5.0F};
+  // Opens close enough that the founding nest fills the frame and ants read as ants.
+  float zoom{7.0F};
   std::optional<std::string> screenshot;
   int screenshot_delay_frames{12};
   int target_fps{60};

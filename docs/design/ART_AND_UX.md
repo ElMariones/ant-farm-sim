@@ -12,7 +12,9 @@ Use procedural primitives and a tiny original sprite atlas first. No external im
 |---|---|---|
 | Deep soil | `#302923` | Low-contrast granular pattern |
 | Sandy layer | `#8D6946` | Sparse 2x2 flecks, darker at depth |
-| Tunnel interior | `#1C1E1B` | Warmed a little beside walls; a trodden `#4A3A2C` floor where ground carries it |
+| Tunnel interior | `#2F2720` | Warm dark earth, never black; a trodden `#5C4734` floor where ground carries it |
+| Brood room | `#483729` | Baked into the ground, warmer than the granary |
+| Granary room | `#3E3325` | Baked into the ground, warmer than a corridor |
 | Stone lens | `#606368` | Cool grey flecks against warm soil; never removable |
 | Foliage | `#708457` | Irregular tufts at surface |
 | Sky | `#C9D5C3` | Narrow calm band |
@@ -102,3 +104,43 @@ Starter farm; busy 100-worker nursery; 1,000-worker overview; selected ant with 
 ## Accepted next visual and interaction work (2026-09-07)
 
 [NEXT_STEPS](../planning/NEXT_STEPS.md) defines the requested subtle worker size/color variation, shared drawn/picked poses, input ownership, responsive inspector and complete generation flow. These are implementation requirements for T014a–d, not delivered features. Existing whole-map terrain baking is implemented; chunk dirty uploads above remain a performance target.
+
+## Polish pass (T014g)
+
+**Ground reads as ground.** The earth is a run of layers — mossy turf, warm topsoil, cooling
+subsoil, dark depths, then the grey clay bed — banded on two scales with seams that wander
+sideways, so a cross-section looks laid down rather than filled with one swatch. Light falls from
+the surface: depth darkens quadratically, and the left and right rims darken a little so the diorama
+sits in its frame. Roots are mixed toward the soil around them and keep a paler core, which is what
+turns them from cracks in the wall into strands growing down.
+
+**Rooms are painted into the ground, not drawn over it.** A brood room and a granary each bake their
+own warm floor and air into the terrain texture, so a chamber is a lit space and the corridor between
+two of them stays a passage. The bake is keyed on the room list as well as the terrain revision.
+Alpha circles laid over the top were tried first and only muddied it.
+
+**Stores read as stores.** Each heap is drawn wider than its cell so a stocked chamber becomes one
+bank of grain rather than a tiled row of identical pyramids, with an off-centre peak and a per-cell
+tone. Below zoom 3 a heap collapses to a band on the chamber floor; grain highlights only appear
+past zoom 6.
+
+**Effects are read off the view, so the simulation owes the renderer nothing.** Cells that opened
+since the last terrain bake throw a puff of their own soil; a heap that grew takes a grain; a worker
+or a winged queen emerging blooms at the queen; a finished chamber rings once. Sparks are bounded at
+220 and age on the same clock as the gait, so a paused colony is completely still.
+
+**The colony says what it just did.** A five-line log of recent events fills the space under an
+empty selection — a worker emerged, scouts found food, a site ran dry, a chamber is finished, the
+colony adapted. A repeat refreshes its line and moves it to the top rather than filling the list
+with copies of whatever happens most often.
+
+**The player can see the goal.** A flight readiness bar sits under the brood-room card: how many of
+the five conditions are met, and the reason the flight is blocked. The header carries the colony's
+live condition as a chip at the right, coloured plain, caution or alarm, so it is readable with the
+inspector closed. Header counters spread across the space that leaves rather than a fixed stride.
+
+**Ants breathe.** One phase drives the tripod gait, a small body bob while walking, and antennae
+casting about. The selected ant's ring pulses so it stays findable in a crowd.
+
+**The bundled font atlas is ASCII only.** A character outside it draws as a question mark, so
+interface strings use plain hyphens and quotes.

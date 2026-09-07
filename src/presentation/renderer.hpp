@@ -9,11 +9,35 @@
 #include "presentation/icons.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace ant::presentation {
+
+// A short-lived mark on the world: soil thrown from a fresh cut, a grain set down on a heap, a
+// bloom at the queen when a worker ecloses. Effects are read off changes in the view, so the
+// simulation owes the renderer nothing.
+struct Spark {
+  enum class Kind : std::uint8_t { Puff, Grain, Bloom, Ring };
+  Vector2 position{};
+  Vector2 drift{};
+  float age{};
+  float life{1.0F};
+  float size{1.0F};
+  Color tint{};
+  Kind kind{Kind::Puff};
+};
+
+// One line of the colony's recent history, shown in the inspector so the player can see what the
+// colony just did rather than only what it currently is.
+struct LogEntry {
+  std::string text;
+  Icon icon{Icon::Worker};
+  float age{};
+};
 
 class Renderer {
 public:
@@ -69,6 +93,13 @@ private:
   void draw_legacy_panel(const game::GameView& view);
   void draw_food_source(const sim::FoodSource& source, bool recruiting) const;
   void draw_granary(const game::GameView& view) const;
+  // Reads what changed since the last frame and turns it into sparks and log lines.
+  void observe(const game::GameView& view, float delta);
+  void note(std::string text, Icon icon);
+  void add_spark(Spark spark);
+  void draw_sparks() const;
+  void draw_log(int panel_x, int panel_width, int top) const;
+  void draw_readiness(const game::GameView& view, int panel_x, int panel_width, int top) const;
   // A modal card with a title, a rule under it and a shadow, shared by every overlay.
   [[nodiscard]] Rectangle draw_modal_card(float width, float height, const char* title) const;
   [[nodiscard]] std::string truncate_to_width(const std::string& text, float max_width,
@@ -76,13 +107,15 @@ private:
   void update_selection(const game::GameView& view, double interpolation_alpha);
   void draw_text(const char* text, int x, int y, int size = 20,
                  Color color = Color{37, 45, 40, 255}) const;
+  // `stacked` puts the icon above the label, for a small square control that still says what it is.
   void draw_button(Rectangle bounds, const char* label, bool active, const WidgetVisual& visual,
-                   bool enabled = true, std::optional<Icon> icon = {}) const;
+                   bool enabled = true, std::optional<Icon> icon = {}, bool stacked = false) const;
   // Tracks, draws and reports one button in a single call, so every clickable control in the
   // interface is declared the same way.
   [[nodiscard]] bool button(std::uint32_t id, Rectangle bounds, const char* label, bool active,
                             bool enabled = true, std::optional<Icon> icon = {},
-                            const char* tooltip = nullptr, const char* tooltip_title = nullptr);
+                            const char* tooltip = nullptr, const char* tooltip_title = nullptr,
+                            bool stacked = false);
   void draw_tooltip(const char* title, const char* body, float anchor_x, float anchor_y) const;
 
   DesktopInput desktop_input_;
@@ -99,6 +132,14 @@ private:
   Texture2D terrain_texture_{};
   bool terrain_texture_ready_{};
   std::uint64_t terrain_revision_{};
+  std::uint64_t rooms_key_{};
+  // What the world looked like at the last bake, so a fresh cut can be spotted and puffed.
+  std::vector<sim::Material> baked_terrain_;
+  std::vector<std::int64_t> pile_amounts_;
+  std::vector<Spark> sparks_;
+  std::deque<LogEntry> log_;
+  game::GameView::Watched watched_{};
+  bool observed_{};
   double terrain_built_at_{};
   // Ants keep facing where they were last going, so a stopped ant does not snap to a default.
   std::unordered_map<sim::EntityId, float> heading_;

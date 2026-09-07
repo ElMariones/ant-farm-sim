@@ -26,6 +26,18 @@ struct LegacyView {
 };
 
 struct GameView {
+  // The counters the interface watches from frame to frame to notice that something happened.
+  struct Watched {
+    std::uint64_t workers_born{};
+    std::uint64_t gynes_born{};
+    std::uint64_t sources_found{};
+    std::uint64_t sources_exhausted{};
+    std::uint64_t rooms_built{};
+    std::size_t complete_rooms{};
+    std::array<std::uint8_t, 4> upgrade_levels{};
+  };
+  [[nodiscard]] Watched watched() const;
+
   std::uint64_t seed{};
   sim::Tick tick{};
   int grid_width{};

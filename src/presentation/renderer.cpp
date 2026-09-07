@@ -13,16 +13,30 @@ namespace ant::presentation {
 namespace {
 
 constexpr Color kDeepSoil{48, 41, 35, 255};
-constexpr Color kSandySoil{141, 105, 70, 255};
-constexpr Color kClay{102, 74, 58, 255};
-constexpr Color kTunnel{28, 30, 27, 255};
+// Earth reads as layers, not one swatch: mossy turf, warm topsoil, cooling subsoil, dark depths,
+// then the grey clay bed under all of it.
+constexpr Color kTurf{104, 116, 74, 255};
+constexpr Color kTopsoil{150, 112, 74, 255};
+constexpr Color kSubsoil{124, 92, 62, 255};
+constexpr Color kDeepEarth{78, 62, 48, 255};
+constexpr Color kClayLight{118, 100, 88, 255};
+constexpr Color kClayDeep{78, 66, 60, 255};
+// Underground is warm dark earth, not black: a tunnel should look carved out of soil.
+constexpr Color kTunnel{47, 39, 32, 255};
 // The trodden floor of a gallery, warmed by the soil it was cut from.
-constexpr Color kTunnelFloor{74, 58, 44, 255};
+constexpr Color kTunnelFloor{92, 71, 52, 255};
+// The rooms the colony keeps: the brood room is warmer than the granary, and both are warmer than
+// the passages between them.
+constexpr Color kBroodRoom{72, 55, 41, 255};
+constexpr Color kGranaryRoom{62, 51, 37, 255};
 constexpr Color kRoot{67, 52, 40, 255};
 constexpr Color kBedrock{37, 33, 30, 255};
 constexpr Color kStone{96, 99, 104, 255};
 constexpr Color kFoliage{112, 132, 87, 255};
 constexpr Color kSky{201, 213, 195, 255};
+// A calm sky with a warmer band at the horizon, so the surface feels lit from above.
+constexpr Color kSkyHigh{178, 197, 190, 255};
+constexpr Color kSkyLow{221, 224, 197, 255};
 constexpr Color kPaper{238, 228, 204, 255};
 constexpr Color kInk{37, 45, 40, 255};
 constexpr Color kCarbohydrate{221, 189, 103, 255};
@@ -98,33 +112,50 @@ Color shade(const Color base, const int delta) {
           base.a};
 }
 
+// The earth a cell is cut from, before anything is done to it: a run of layers from turf down to
+// the clay bed, banded so the cross-section reads as ground that was laid down rather than filled.
+Color earth_color(const int x, const int y, const std::uint64_t seed) {
+  // Seams wander, on two scales, so a stratum reads as laid-down ground rather than a ruled line.
+  const int drift = static_cast<int>(hash_pixel(x / 7, 3, seed) % 7ULL) - 3 +
+                    static_cast<int>(hash_pixel(x / 29, 5, seed ^ 0x11ULL) % 9ULL) - 4;
+  const int banded = y + drift;
+  const int coarse = static_cast<int>(hash_pixel(0, banded / 11, seed) % 21ULL) - 10;
+  const int seam = static_cast<int>(hash_pixel(2, banded / 5, seed ^ 0x5EAULL) % 11ULL) - 5;
+  const int fine = static_cast<int>(hash_pixel(1, banded / 3, seed ^ 0xB4ULL) % 7ULL) - 3;
+
+  Color base;
+  if (y <= 34) {
+    base = mix(kTurf, kTopsoil, std::clamp(static_cast<float>(y - 32) / 3.0F, 0.0F, 1.0F));
+  } else if (y < 90) {
+    base = mix(kTopsoil, kSubsoil, static_cast<float>(y - 34) / 56.0F);
+  } else if (y < 138) {
+    base = mix(kSubsoil, kDeepEarth, static_cast<float>(y - 90) / 48.0F);
+  } else {
+    base = mix(kClayLight, kClayDeep, std::clamp(static_cast<float>(y - 138) / 74.0F, 0.0F, 1.0F));
+  }
+  return shade(base, coarse + seam + fine);
+}
+
 Color material_color(const sim::Material material, const int x, const int y,
                      const std::uint64_t seed) {
-  if (material == sim::Material::Sky) {
-    return kSky;
-  }
-  if (material == sim::Material::Air) {
-    return kTunnel;
-  }
-  if (material == sim::Material::Root) {
-    return kRoot;
-  }
+  if (material == sim::Material::Sky) return kSky;
+  if (material == sim::Material::Air) return kTunnel;
   if (material == sim::Material::Bedrock) {
-    return kBedrock;
+    const std::uint64_t speck = hash_pixel(x, y, seed ^ 0xBED0CULL);
+    return shade(kBedrock, static_cast<int>(speck % 9ULL) - 4);
   }
   if (material == sim::Material::Stone) {
     // Cool grey flecked against the warm soil, so a lens reads as rock and not as darker dirt.
     const std::uint64_t speck = hash_pixel(x, y, seed ^ 0x570E5ULL);
     return shade(kStone, static_cast<int>(speck % 19ULL) - 9);
   }
-  const std::uint64_t fleck = (static_cast<std::uint64_t>(x) * 73856093ULL) ^
-                              (static_cast<std::uint64_t>(y) * 19349663ULL) ^ (seed * 83492791ULL);
-  const int variation = static_cast<int>((fleck >> 4U) % 13ULL) - 6;
-  const Color base = material == sim::Material::Clay ? kClay : kSandySoil;
-  return {static_cast<unsigned char>(std::clamp(static_cast<int>(base.r) + variation, 0, 255)),
-          static_cast<unsigned char>(std::clamp(static_cast<int>(base.g) + variation, 0, 255)),
-          static_cast<unsigned char>(std::clamp(static_cast<int>(base.b) + variation, 0, 255)),
-          255};
+  const Color earth = earth_color(x, y, seed);
+  if (material == sim::Material::Root) {
+    // Woody, and only a little darker than the ground it runs through: a root should read as a
+    // strand growing down, not as a crack in the wall.
+    return mix(earth, kRoot, 0.62F);
+  }
+  return earth;
 }
 
 const char* nutrient_name(const sim::Nutrient nutrient) {
@@ -179,7 +210,7 @@ void Renderer::draw_text(const char* text, const int x, const int y, const int s
 
 void Renderer::draw_button(const Rectangle bounds, const char* label, const bool active,
                           const WidgetVisual& visual, const bool enabled,
-                          const std::optional<Icon> icon) const {
+                          const std::optional<Icon> icon, const bool stacked) const {
   // Lift on hover, settle on press. Both are eased weights, so the motion is smooth and matches at
   // any frame rate.
   const float lift = visual.hover * 2.0F - visual.press * 2.6F;
@@ -200,6 +231,19 @@ void Renderer::draw_button(const Rectangle bounds, const char* label, const bool
 
   const Color foreground = enabled ? kInk : kMutedInk;
   const bool has_label = label != nullptr && label[0] != '\0';
+  if (stacked) {
+    const float glyph = 17.0F;
+    if (icon) {
+      draw_icon(*icon, {body.x + (body.width - glyph) * 0.5F, body.y + 6.0F, glyph, glyph},
+                foreground);
+    }
+    if (has_label) {
+      const Vector2 measured = MeasureTextEx(font_, label, 13.0F, 0.0F);
+      DrawTextEx(font_, label, {body.x + (body.width - measured.x) * 0.5F, body.y + 25.0F}, 13.0F,
+                 0.0F, foreground);
+    }
+    return;
+  }
   const float glyph = std::min(body.height - 14.0F, 20.0F);
   const Vector2 measured =
       has_label ? MeasureTextEx(font_, label, 19.0F, 0.0F) : Vector2{0.0F, 0.0F};
@@ -218,10 +262,10 @@ void Renderer::draw_button(const Rectangle bounds, const char* label, const bool
 
 bool Renderer::button(const std::uint32_t id, const Rectangle bounds, const char* label,
                       const bool active, const bool enabled, const std::optional<Icon> icon,
-                      const char* tooltip, const char* tooltip_title) {
+                      const char* tooltip, const char* tooltip_title, const bool stacked) {
   const WidgetVisual visual =
       ui_.track(id, {bounds.x, bounds.y, bounds.width, bounds.height}, enabled);
-  draw_button(bounds, label, active, visual, enabled, icon);
+  draw_button(bounds, label, active, visual, enabled, icon, stacked);
   // An icon-only control still has to say what it does, so hover always carries a name.
   const bool named = label != nullptr && label[0] != '\0';
   if (visual.over && tooltip != nullptr) {
@@ -268,10 +312,10 @@ void Renderer::draw_tooltip(const char* title, const char* body, const float anc
 
 namespace {
 
-constexpr float kUpgradeCardTop = 436.0F;
+constexpr float kUpgradeCardTop = 470.0F;
 constexpr float kUpgradeCardHeight = 30.0F;
 constexpr float kUpgradeCardStride = 34.0F;
-constexpr float kFocusButtonTop = 380.0F;
+constexpr float kFocusButtonTop = 374.0F;
 
 Rectangle upgrade_card_bounds(const int panel_x, const int panel_width, const int index) {
   return {static_cast<float>(panel_x + 18), kUpgradeCardTop + kUpgradeCardStride * index,
@@ -279,7 +323,7 @@ Rectangle upgrade_card_bounds(const int panel_x, const int panel_width, const in
 }
 
 Rectangle focus_button_bounds(const int panel_x, const int index) {
-  return {static_cast<float>(panel_x + 18 + index * 70), kFocusButtonTop, 64.0F, 29.0F};
+  return {static_cast<float>(panel_x + 18 + index * 70), kFocusButtonTop, 64.0F, 46.0F};
 }
 
 
@@ -361,7 +405,9 @@ void Renderer::draw(const game::GameView& view, const double interpolation_alpha
                     const int speed, const bool simulation_limited) {
   // Gait and other world motion run off this clock rather than wall time, so a paused colony is
   // genuinely still: legs stop mid-stride instead of treading air.
-  if (!paused) animation_clock_ += GetFrameTime();
+  const float delta = paused ? 0.0F : GetFrameTime();
+  animation_clock_ += delta;
+  observe(view, delta);
   update_selection(view, interpolation_alpha);
   ui_.set_input_region(!scenes_.modal());
   tooltip_title_ = nullptr;
@@ -514,7 +560,21 @@ void Renderer::draw_recovery_prompt() {
 }
 
 void Renderer::refresh_terrain_texture(const game::GameView& view) {
-  if (terrain_texture_ready_ && terrain_revision_ == view.terrain_revision) return;
+  // Rooms are painted into the ground rather than drawn over it, so a chamber reads as a lit space
+  // and the corridor between two of them stays a passage. They change rarely, so they join the
+  // terrain revision in deciding when the bake is stale.
+  std::uint64_t rooms_key = 1469598103934665603ULL;
+  for (const sim::Room& room : view.rooms) {
+    rooms_key = (rooms_key ^ static_cast<std::uint64_t>(room.centre.x * 397 + room.centre.y * 31 +
+                                                        room.radius * 7 +
+                                                        static_cast<int>(room.kind) * 3 +
+                                                        (room.complete ? 1 : 0))) *
+                1099511628211ULL;
+  }
+  if (terrain_texture_ready_ && terrain_revision_ == view.terrain_revision &&
+      rooms_key_ == rooms_key) {
+    return;
+  }
   const double now = GetTime();
   if (terrain_texture_ready_ && now - terrain_built_at_ < 0.15) return;
   terrain_built_at_ = now;
@@ -528,12 +588,31 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
     if (x < 0 || y < 0 || x >= view.grid_width || y >= view.grid_height) return sim::Material::Bedrock;
     return view.terrain[static_cast<std::size_t>(y * view.grid_width + x)];
   };
+  // 0 corridor, 1 brood room, 2 granary.
+  std::vector<std::uint8_t> room_of(
+      static_cast<std::size_t>(view.grid_width * view.grid_height), 0);
+  for (const sim::Room& room : view.rooms) {
+    const int reach = room.radius;
+    for (int dy = -reach; dy <= reach; ++dy) {
+      for (int dx = -reach; dx <= reach; ++dx) {
+        const sim::GridPos cell{room.centre.x + dx, room.centre.y + dy};
+        if (cell.x < 0 || cell.y < 0 || cell.x >= view.grid_width || cell.y >= view.grid_height) continue;
+        if (!room.contains(cell)) continue;
+        room_of[static_cast<std::size_t>(cell.y * view.grid_width + cell.x)] =
+            room.kind == sim::RoomKind::Nursery ? 1 : 2;
+      }
+    }
+  }
 
   for (int cell_y = 0; cell_y < view.grid_height; ++cell_y) {
-    // Deeper ground is cooler and darker, so the cross-section reads as depth rather than a flat wall.
+    // Light falls from the surface, so the ground darkens with depth on top of its own layering.
     const float depth = std::clamp(static_cast<float>(cell_y - 32) / 170.0F, 0.0F, 1.0F);
-    const int depth_shade = -static_cast<int>(depth * 26.0F);
+    const int depth_shade = -static_cast<int>(depth * depth * 22.0F);
     for (int cell_x = 0; cell_x < view.grid_width; ++cell_x) {
+      // A gentle darkening toward the left and right rims, so the diorama sits in its frame.
+      const int rim = -static_cast<int>(
+          std::max(0.0F, 1.0F - static_cast<float>(std::min(cell_x, view.grid_width - 1 - cell_x)) /
+                             46.0F) * 16.0F);
       const sim::Material material = material_at(cell_x, cell_y);
       const bool solid = material != sim::Material::Sky && material != sim::Material::Air;
       const bool open_above = !solid && material_at(cell_x, cell_y - 1) != material;
@@ -562,18 +641,27 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
             // Sparse flecks rather than uniform static, so the soil has grain without fizzing.
             const int grain = (noise % 23ULL) == 0 ? 16 : ((noise >> 8U) % 17ULL) == 0 ? -13
                                                                                       : (static_cast<int>((noise >> 16U) % 7ULL) - 3);
-            color = shade(color, grain + depth_shade);
-            if (lit && sub_y == 0) color = shade(color, 22);
-            if (shadowed && sub_y == kTerrainDetail - 1) color = shade(color, -16);
+            color = shade(color, grain + depth_shade + rim);
+            // A root keeps a paler core, which is what makes it read as a strand rather than a slab.
+            if (material == sim::Material::Root && sub_x == 1) color = shade(color, 13);
+            if (lit && sub_y == 0) color = shade(color, 24);
+            if (shadowed && sub_y == kTerrainDetail - 1) color = shade(color, -18);
           } else if (material == sim::Material::Air) {
             const std::uint64_t dust = hash_pixel(px, py, view.seed ^ 0xA1EULL);
             const bool floor_row = floored && sub_y == kTerrainDetail - 1;
-            color = floor_row ? mix(kTunnel, kTunnelFloor, 0.85F)
-                              : shade(kTunnel, walls * 5 + (open_above && sub_y == 0 ? 8 : 0) +
-                                                   static_cast<int>(dust % 5ULL));
+            const std::uint8_t room = room_of[static_cast<std::size_t>(cell_y * view.grid_width + cell_x)];
+            // A room is a place the colony keeps: its floor is trodden warm and the air above it
+            // carries a little of that warmth. A corridor stays plainer.
+            const Color chamber = room == 1 ? kBroodRoom : room == 2 ? kGranaryRoom : kTunnel;
+            const bool ceiling = sub_y == 0 && is_solid(cell_x, cell_y - 1);
+            color = floor_row ? mix(chamber, kTunnelFloor, room == 0 ? 0.62F : 0.78F)
+                              : shade(chamber, (ceiling ? -12 : 0) + walls * 3 +
+                                                   (open_above && sub_y == 0 ? 8 : 0) +
+                                                   static_cast<int>(dust % 5ULL) - 2);
           } else {
-            // A calm sky band that lifts slightly toward the top of the frame.
-            color = shade(kSky, static_cast<int>((1.0F - static_cast<float>(py) / 96.0F) * 10.0F));
+            // A calm sky that warms toward the horizon, so the surface reads as lit from above.
+            const float toward_horizon = std::clamp(static_cast<float>(py) / 96.0F, 0.0F, 1.0F);
+            color = mix(kSkyHigh, kSkyLow, toward_horizon * toward_horizon);
           }
           pixels[static_cast<std::size_t>(py) * static_cast<std::size_t>(width) +
                  static_cast<std::size_t>(px)] = color;
@@ -582,12 +670,34 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
     }
   }
 
+  // Cells that opened since the last bake get a puff of thrown soil, which is what makes digging
+  // read as work rather than as the ground quietly changing colour.
+  if (baked_terrain_.size() == view.terrain.size()) {
+    int puffs = 0;
+    for (std::size_t index = 0; index < view.terrain.size() && puffs < 24; ++index) {
+      if (view.terrain[index] != sim::Material::Air || baked_terrain_[index] == sim::Material::Air) continue;
+      const int cell_x = static_cast<int>(index) % view.grid_width;
+      const int cell_y = static_cast<int>(index) / view.grid_width;
+      for (int grain = 0; grain < 3; ++grain) {
+        const std::uint64_t noise = hash_pixel(cell_x * 3 + grain, cell_y, view.seed);
+        add_spark({{static_cast<float>(cell_x) + 0.5F, static_cast<float>(cell_y) + 0.5F},
+                   {(static_cast<float>(noise % 100ULL) / 100.0F - 0.5F) * 1.6F,
+                    -0.3F - static_cast<float>((noise >> 8U) % 60ULL) / 100.0F},
+                   0.0F, 0.55F + static_cast<float>((noise >> 16U) % 40ULL) / 100.0F, 1.0F,
+                   earth_color(cell_x, cell_y, view.seed), Spark::Kind::Puff});
+      }
+      ++puffs;
+    }
+  }
+  baked_terrain_ = view.terrain;
+
   if (terrain_texture_ready_) UnloadTexture(terrain_texture_);
   terrain_texture_ = LoadTextureFromImage(image);
   SetTextureFilter(terrain_texture_, TEXTURE_FILTER_POINT);
   UnloadImage(image);
   terrain_texture_ready_ = true;
   terrain_revision_ = view.terrain_revision;
+  rooms_key_ = rooms_key;
 }
 
 void Renderer::draw_food_source(const sim::FoodSource& source, const bool recruiting) const {
@@ -666,23 +776,150 @@ void Renderer::draw_granary(const game::GameView& view) const {
     const Color color = pile.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
     const float fullness = std::clamp(
         static_cast<float>(pile.amount) / static_cast<float>(sim::kGrainsPerStoreCell), 0.0F, 1.0F);
-    const float x = static_cast<float>(pile.position.x);
-    const float y = static_cast<float>(pile.position.y);
-    if (zoom < 2.2F) {
-      // Too small for grains: a tinted cell still shows where the colony keeps its food.
-      DrawRectangleV({x, y + 1.0F - fullness}, {1.0F, fullness}, Fade(color, 0.85F));
+    const float x = static_cast<float>(pile.position.x) + 0.5F;
+    const float floor = static_cast<float>(pile.position.y) + 0.98F;
+    if (zoom < 3.0F) {
+      // Too small for grain: a band on the chamber floor that rises as the heap fills.
+      const float height = 0.25F + fullness * 0.7F;
+      DrawRectangleV({x - 0.5F, floor - height}, {1.0F, height}, Fade(color, 0.9F));
       continue;
     }
-    // A heap that grows up from the chamber floor, so a full store reads at a glance.
-    const int grains = 1 + static_cast<int>(fullness * 6.0F);
-    DrawRectangleV({x + 0.05F, y + 0.86F}, {0.9F, 0.12F}, Fade(shade(color, -50), 0.55F));
+    // Heaps are drawn wider than their cell so a stocked chamber reads as one bank of grain
+    // rather than a tiled row of identical little pyramids.
+    const std::uint64_t noise = hash_pixel(pile.position.x, pile.position.y, 0x6A1EULL);
+    const float lean = (static_cast<float>(noise % 100ULL) / 100.0F - 0.5F) * 0.34F;
+    const float reach = 0.56F + fullness * 0.14F + static_cast<float>((noise >> 7U) % 9ULL) * 0.012F;
+    const float height = 0.30F + fullness * 0.60F;
+    const Color tone = shade(color, static_cast<int>((noise >> 13U) % 17ULL) - 8);
+    std::array<Vector2, 11> mound{};
+    mound[0] = {x + lean, floor};
+    for (std::size_t step = 1; step < mound.size(); ++step) {
+      const float t = static_cast<float>(step - 1) / static_cast<float>(mound.size() - 2);
+      // A peak that is off centre reads as a heap somebody piled, not a moulded cone.
+      const float shape = std::pow(std::sin(t * PI), 0.8F);
+      mound[step] = {x + lean - reach + 2.0F * reach * t, floor - shape * height};
+    }
+    // Screen y grows downward, so the fan has to be wound the other way to survive culling.
+    std::reverse(mound.begin() + 1, mound.end());
+    DrawTriangleFan(mound.data(), static_cast<int>(mound.size()), color);
+    if (zoom < 6.0F) continue;
+    const int grains = 2 + static_cast<int>(fullness * 3.0F);
     for (int grain = 0; grain < grains; ++grain) {
-      const std::uint64_t noise = hash_pixel(pile.position.x * 7 + grain, pile.position.y, 0x6A1EULL);
-      const float across = 0.16F + static_cast<float>(noise % 68ULL) / 100.0F;
-      const float rise = static_cast<float>(grain) * 0.11F;
-      draw_oriented_ellipse({x + across, y + 0.84F - rise - static_cast<float>((noise >> 9U) % 9ULL) * 0.012F},
-                            0.19F, 0.13F, static_cast<float>((noise >> 17U) % 30ULL) * 0.1F,
-                            shade(color, static_cast<int>((noise >> 24U) % 26ULL) - 13));
+      const std::uint64_t speck = hash_pixel(grain, pile.position.x, noise);
+      const float across = (static_cast<float>(speck % 100ULL) / 100.0F - 0.5F) * reach * 1.4F;
+      const float lift = std::pow(std::sin((across / reach + 1.0F) * 0.5F * PI), 0.8F) * height;
+      draw_oriented_ellipse({x + lean + across, floor - lift * 0.66F},
+                            0.16F, 0.12F, static_cast<float>((speck >> 17U) % 30ULL) * 0.1F,
+                            shade(tone, 16 + static_cast<int>((speck >> 24U) % 12ULL)));
+    }
+  }
+}
+
+void Renderer::note(std::string text, const Icon icon) {
+  // The same thing happening again refreshes its line and moves it to the top, rather than filling
+  // the list with copies of whatever the colony does most often.
+  const auto seen = std::find_if(log_.begin(), log_.end(),
+                                 [&text](const LogEntry& entry) { return entry.text == text; });
+  if (seen != log_.end()) {
+    LogEntry refreshed = *seen;
+    refreshed.age = 0.0F;
+    log_.erase(seen);
+    log_.push_front(std::move(refreshed));
+    return;
+  }
+  log_.push_front({std::move(text), icon, 0.0F});
+  while (log_.size() > 5) log_.pop_back();
+}
+
+void Renderer::add_spark(Spark spark) {
+  // Bounded: a busy colony must never turn into a particle storm.
+  if (sparks_.size() >= 220) return;
+  sparks_.push_back(spark);
+}
+
+void Renderer::observe(const game::GameView& view, const float delta) {
+  for (Spark& spark : sparks_) spark.age += delta;
+  sparks_.erase(std::remove_if(sparks_.begin(), sparks_.end(),
+                               [](const Spark& spark) { return spark.age >= spark.life; }),
+                sparks_.end());
+  for (LogEntry& entry : log_) entry.age += delta;
+
+  const game::GameView::Watched now = view.watched();
+  const Vector2 nest{static_cast<float>(view.home.x) + 0.5F, static_cast<float>(view.home.y) + 0.5F};
+  if (!observed_) {
+    // The first frame of a colony is not news; it is just the colony.
+    observed_ = true;
+    watched_ = now;
+    pile_amounts_.clear();
+    for (const sim::FoodPile& pile : view.granary) pile_amounts_.push_back(pile.amount);
+    return;
+  }
+
+  if (now.workers_born > watched_.workers_born) {
+    for (std::uint64_t born = 0; born < std::min<std::uint64_t>(3, now.workers_born - watched_.workers_born); ++born) {
+      add_spark({nest, {0.0F, -1.1F}, 0.0F, 1.1F, 1.0F, kBrood, Spark::Kind::Bloom});
+    }
+    note("A worker emerged", Icon::Worker);
+  }
+  if (now.gynes_born > watched_.gynes_born) {
+    add_spark({nest, {0.0F, -1.4F}, 0.0F, 1.6F, 1.6F, Color{226, 214, 232, 255}, Spark::Kind::Bloom});
+    note("A winged queen emerged", Icon::Flight);
+  }
+  if (now.sources_found > watched_.sources_found) note("Scouts found food", Icon::Seed);
+  if (now.sources_exhausted > watched_.sources_exhausted) note("A food site ran dry", Icon::Prey);
+  if (now.rooms_built > watched_.rooms_built) note("Started a new chamber", Icon::Colony);
+  if (now.complete_rooms > watched_.complete_rooms) {
+    for (const sim::Room& room : view.rooms) {
+      if (!room.complete) continue;
+      add_spark({{static_cast<float>(room.centre.x) + 0.5F, static_cast<float>(room.centre.y) + 0.5F},
+                 {0.0F, 0.0F}, 0.0F, 1.4F, static_cast<float>(room.radius), kSelection,
+                 Spark::Kind::Ring});
+    }
+    note("A chamber is finished", Icon::Colony);
+  }
+  for (std::size_t index = 0; index < now.upgrade_levels.size(); ++index) {
+    if (now.upgrade_levels[index] > watched_.upgrade_levels[index]) {
+      note("The colony adapted", Icon::Mandibles);
+    }
+  }
+  watched_ = now;
+
+  // Grain set down on a heap. Piles are append-only, so the same index is the same cell.
+  pile_amounts_.resize(view.granary.size(), 0);
+  for (std::size_t index = 0; index < view.granary.size(); ++index) {
+    const sim::FoodPile& pile = view.granary[index];
+    if (pile.amount > pile_amounts_[index]) {
+      add_spark({{static_cast<float>(pile.position.x) + 0.5F,
+                  static_cast<float>(pile.position.y) + 0.4F},
+                 {0.0F, -0.5F}, 0.0F, 0.7F, 1.0F,
+                 pile.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein,
+                 Spark::Kind::Grain});
+    }
+    pile_amounts_[index] = pile.amount;
+  }
+}
+
+void Renderer::draw_sparks() const {
+  for (const Spark& spark : sparks_) {
+    const float life = std::clamp(spark.age / spark.life, 0.0F, 1.0F);
+    const float fade = 1.0F - life;
+    const Vector2 at{spark.position.x + spark.drift.x * life,
+                     spark.position.y + spark.drift.y * life};
+    switch (spark.kind) {
+    case Spark::Kind::Puff:
+      // Loose soil thrown out of a fresh cut, settling as it fades.
+      DrawCircleV({at.x, at.y + life * life * 0.7F}, (0.18F + life * 0.42F) * spark.size,
+                  Fade(spark.tint, 0.5F * fade));
+      break;
+    case Spark::Kind::Grain:
+      DrawCircleV(at, 0.22F * fade * spark.size, Fade(spark.tint, 0.9F * fade));
+      break;
+    case Spark::Kind::Bloom:
+      DrawCircleLinesV(at, (0.5F + life * 1.6F) * spark.size, Fade(spark.tint, 0.8F * fade));
+      break;
+    case Spark::Kind::Ring:
+      DrawCircleLinesV(at, spark.size * (0.6F + life * 0.7F), Fade(spark.tint, 0.55F * fade));
+      break;
     }
   }
 }
@@ -728,17 +965,6 @@ void Renderer::draw_world(const game::GameView& view) {
     DrawCircleV(nest, 1.6F * static_cast<float>(ring), Fade(Color{92, 74, 54, 255}, 0.06F));
   }
 
-  // Rooms first, as a soft warmth on the chamber floor, so brood and grain sit inside a place.
-  for (const sim::Room& room : view.rooms) {
-    const Color glow = room.kind == sim::RoomKind::Nursery ? Color{146, 108, 74, 255}
-                                                           : Color{120, 108, 66, 255};
-    const Vector2 centre{static_cast<float>(room.centre.x) + 0.5F,
-                         static_cast<float>(room.centre.y) + 0.5F};
-    for (int ring = 3; ring >= 1; --ring) {
-      DrawCircleV(centre, static_cast<float>(room.radius) * 0.42F * static_cast<float>(ring),
-                  Fade(glow, room.complete ? 0.07F : 0.04F));
-    }
-  }
   for (const sim::FoodSource& source : view.sources) {
     draw_food_source(source, source.id == view.recruiting_source);
   }
@@ -799,6 +1025,7 @@ void Renderer::draw_world(const game::GameView& view) {
     }
     draw_ant(actor, poses_[index], camera_.zoom(), selection_.id() == actor.id);
   }
+  draw_sparks();
 
   EndMode2D();
 }
@@ -827,11 +1054,19 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const ActorPose& pose,
   const bool royal = actor.kind == sim::AntKind::Queen;
   const float scale = pose.scale;
   const Color body = royal || winged ? kQueenChitin : kChitin;
-  const Vector2 centre{pose.centre.x, pose.centre.y};
+  // One phase drives the whole ant: the tripod gait, the bob it makes, and the antennae casting
+  // about. Phased per ant so a column does not march in lockstep.
+  const float phase = animation_clock_ * 7.0F + static_cast<float>(actor.id % 13ULL) * 0.48F;
+  const bool walking = std::abs(actor.x - actor.previous_x) + std::abs(actor.y - actor.previous_y) >
+                       1e-4;
+  const float bob = walking ? std::sin(phase * 2.0F) * 0.055F * scale : 0.0F;
+  const Vector2 centre{pose.centre.x, pose.centre.y + bob};
 
   if (selected) {
-    DrawCircleLinesV(centre, 2.8F * scale, kSelection);
-    DrawCircleLinesV(centre, 2.5F * scale, Fade(kSelection, 0.45F));
+    // A ring that breathes, so the selected ant stays findable in a crowd.
+    const float pulse = 0.5F + 0.5F * std::sin(animation_clock_ * 3.0F);
+    DrawCircleLinesV(centre, (2.7F + pulse * 0.45F) * scale, kSelection);
+    DrawCircleLinesV(centre, 2.4F * scale, Fade(kSelection, 0.45F));
   }
 
   // Far out an ant is a moving dot; the cargo accent is what stays readable. These thresholds are
@@ -851,8 +1086,6 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const ActorPose& pose,
   const Vector2 head = offset_along(centre, heading, 0.85F * scale, 0.0F);
 
   if (detailed) {
-    // Alternating tripod gait, phased per ant so a column does not march in lockstep.
-    const float phase = animation_clock_ * 7.0F + static_cast<float>(actor.id % 13ULL) * 0.48F;
     for (int leg = 0; leg < 3; ++leg) {
       const float root_along = (0.45F - static_cast<float>(leg) * 0.42F) * scale;
       for (int side = -1; side <= 1; side += 2) {
@@ -892,9 +1125,12 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const ActorPose& pose,
 
   if (detailed) {
     for (int side = -1; side <= 1; side += 2) {
+      // Antennae cast about as the ant walks; they are the part that makes it look alive.
+      const float sweep = std::sin(phase * 0.8F + static_cast<float>(side)) * 0.16F * scale;
       const Vector2 base = offset_along(head, heading, 0.25F * scale, 0.16F * scale * static_cast<float>(side));
-      const Vector2 elbow = offset_along(head, heading, 0.75F * scale, 0.5F * scale * static_cast<float>(side));
-      const Vector2 tip = offset_along(head, heading, 1.15F * scale, 0.42F * scale * static_cast<float>(side));
+      const Vector2 elbow = offset_along(head, heading, 0.75F * scale, 0.5F * scale * static_cast<float>(side) + sweep * 0.4F);
+      const Vector2 tip = offset_along(head, heading, 1.15F * scale + sweep,
+                                       0.42F * scale * static_cast<float>(side) + sweep);
       DrawLineEx(base, elbow, 0.09F * scale, shade(body, -20));
       DrawLineEx(elbow, tip, 0.08F * scale, shade(body, -20));
     }
@@ -950,8 +1186,7 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   DrawRectangle(0, 68, width, 4, Color{112, 132, 87, 255});
   draw_text("ANT FARM", 22, 15, 27);
   draw_text("LIVING COLONY", 23, 44, 13, kMutedInk);
-  const int metric_start = width >= 1180 ? 190 : 170;
-  const int metric_width = (width - metric_start - 16) / 7;
+  const int metric_start = width >= 1180 ? 186 : 168;
   struct Metric { Icon icon; const char* label; std::string value; };
   std::vector<Metric> metrics{
       {Icon::Worker, "WORKERS", std::to_string(worker_count)},
@@ -967,11 +1202,47 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   if (view.legacy.wallet > 0 || view.legacy.successful_flights > 0) {
     metrics.push_back({Icon::Queen, "LEGACY", std::to_string(view.legacy.wallet)});
   }
+  // The colony's live condition sits at the right of the header, where it is readable even with the
+  // inspector closed. The counters take the space that leaves.
+  const char* headline = view.extinct      ? "The colony is still"
+                         : view.decline    ? "The queen is gone"
+                         : view.recruiting_source != 0 ? "New food found"
+                         : !view.knows_any_food        ? "Scouts are searching"
+                         : view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity)
+                             ? "Brood rooms are full"
+                         : view.stores.protein < 10'000 ? "Protein is low"
+                                                        : "Growing steadily";
+  const bool brood_full = view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity);
+  const bool alarm = view.decline || view.extinct;
+  const bool caution = !alarm && (brood_full || view.stores.protein < 10'000 || !view.knows_any_food);
+  const Icon headline_icon = alarm                        ? Icon::Cross
+                             : view.recruiting_source != 0 ? Icon::Seed
+                             : !view.knows_any_food        ? Icon::Trail
+                             : brood_full                  ? Icon::Nursery
+                             : view.stores.protein < 10'000 ? Icon::Prey
+                                                            : Icon::Check;
+  const Vector2 headline_size = MeasureTextEx(font_, headline, 16.0F, 0.0F);
+  const float chip_width = headline_size.x + 46.0F;
+  const float chip_x = static_cast<float>(width) - chip_width - 18.0F;
+  const int metric_width =
+      std::clamp((static_cast<int>(chip_x) - metric_start - 24) / static_cast<int>(metrics.size()),
+                 92, 158);
   for (std::size_t index = 0; index < metrics.size(); ++index) {
     const int x = metric_start + static_cast<int>(index) * metric_width;
     draw_icon(metrics[index].icon, {static_cast<float>(x), 13.0F, 13.0F, 13.0F}, kMutedInk);
     draw_text(metrics[index].label, x + 17, 14, 12, kMutedInk);
     draw_text(metrics[index].value.c_str(), x, 32, 23);
+  }
+  if (chip_x > static_cast<float>(metric_start + metric_width * static_cast<int>(metrics.size()))) {
+    const Rectangle chip{chip_x, 16.0F, chip_width, 34.0F};
+    const Color edge = alarm ? kProtein : caution ? Color{192, 156, 96, 255} : kWarmLine;
+    const Color ink = alarm ? kProtein : kInk;
+    DrawRectangleRounded(chip, 0.42F, 8, alarm ? Color{242, 224, 216, 255}
+                                        : caution ? Color{247, 238, 213, 255} : kPaper);
+    DrawRectangleRoundedLinesEx(chip, 0.42F, 8, 1.0F, edge);
+    draw_icon(headline_icon, {chip.x + 13.0F, chip.y + 10.0F, 14.0F, 14.0F},
+              alarm ? kProtein : caution ? Color{150, 118, 62, 255} : kMutedInk);
+    draw_text(headline, static_cast<int>(chip.x) + 33, static_cast<int>(chip.y) + 8, 16, ink);
   }
 
   const float footer_y = layout_.footer.y;
@@ -988,8 +1259,11 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
              "Twenty times speed (key 3)")) speed_requested_ = 20;
   if (button(5, {320, footer_y + 8, 92, 40}, "Save", false, true, Icon::Save, "Save now (S)"))
     save_requested_ = true;
+  const unsigned long long elapsed = view.tick / sim::kTicksPerSecond;
   draw_text(TextFormat("Generation %llu", static_cast<unsigned long long>(view.legacy.generation)),
-            428, static_cast<int>(footer_y) + 18, 18);
+            428, static_cast<int>(footer_y) + 10, 18);
+  draw_text(TextFormat("%llu:%02llu in the ground", elapsed / 60, elapsed % 60), 428,
+            static_cast<int>(footer_y) + 30, 15, kMutedInk);
   if (button(6, {static_cast<float>(width - 232), footer_y + 8, 108, 40}, "Flight", false, true,
              Icon::Flight, "Nuptial flight and Legacy (L)")) {
     scenes_.open_legacy();
@@ -1036,33 +1310,38 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text(condition, panel_x + 22, py(116), 22, view.decline ? kProtein : kInk);
   const int nurseries = static_cast<int>(std::count_if(view.rooms.begin(), view.rooms.end(),
       [](const sim::Room& room) { return room.kind == sim::RoomKind::Nursery; }));
-  draw_text(TextFormat("%d workers  |  %d brood rooms, %d granaries", worker_count, nurseries,
-                       static_cast<int>(view.rooms.size()) - nurseries),
-            panel_x + 22, py(148), 16, kMutedInk);
+  const int granaries = static_cast<int>(view.rooms.size()) - nurseries;
+  draw_text(TextFormat("%d workers  |  %d brood room%s, %d granar%s", worker_count, nurseries,
+                       nurseries == 1 ? "" : "s", granaries, granaries == 1 ? "y" : "ies"),
+            panel_x + 22, py(142), 16, kMutedInk);
+  draw_text(game::bottleneck_name(view.bottleneck), panel_x + 22, py(162), 14, kMutedInk);
 
-  const Rectangle nursery_card{static_cast<float>(panel_x + 16), static_cast<float>(py(180)),
-                                static_cast<float>(panel_width - 32), 88.0F};
+  const Rectangle nursery_card{static_cast<float>(panel_x + 16), static_cast<float>(py(182)),
+                                static_cast<float>(panel_width - 32), 64.0F};
   DrawRectangleRounded(nursery_card, 0.12F, 6, kPaper);
   DrawRectangleRoundedLinesEx(nursery_card, 0.12F, 6, 1.0F, kWarmLine);
-  draw_text("NURSERY", panel_x + 30, py(195), 13, kMutedInk);
-  draw_text(TextFormat("%zu of %d spaces", view.brood.size(), view.nursery_capacity),
-            panel_x + 30, py(216), 19);
+  draw_icon(Icon::Nursery, {nursery_card.x + 13.0F, nursery_card.y + 10.0F, 12.0F, 12.0F}, kMutedInk);
+  draw_text("BROOD ROOMS", panel_x + 48, py(192), 13, kMutedInk);
+  draw_text(TextFormat("%zu of %d cradles", view.brood.size(), view.nursery_capacity),
+            panel_x + 30, py(210), 18);
   const float ratio = view.nursery_capacity == 0 ? 0.0F : std::min(1.0F, static_cast<float>(view.brood.size()) / static_cast<float>(view.nursery_capacity));
-  DrawRectangle(panel_x + 30, py(247), panel_width - 60, 7, Color{214, 200, 170, 255});
-  DrawRectangle(panel_x + 30, py(247), static_cast<int>(static_cast<float>(panel_width - 60) * ratio), 7, kFoliage);
+  DrawRectangle(panel_x + 30, py(233), panel_width - 60, 6, Color{214, 200, 170, 255});
+  DrawRectangle(panel_x + 30, py(233), static_cast<int>(static_cast<float>(panel_width - 60) * ratio), 6, kFoliage);
 
-  draw_text("COLONY ACTIVITY", panel_x + 22, py(292), 14, kMutedInk);
+  draw_readiness(view, panel_x, panel_width, py(258));
+
+  draw_text("COLONY ACTIVITY", panel_x + 22, py(312), 14, kMutedInk);
   draw_text(TextFormat("Forage %u   Dig %u   Nurse %u", view.tasks.workers_by_task[0],
                        view.tasks.workers_by_task[1], view.tasks.workers_by_task[2]),
-            panel_x + 22, py(317), 16);
-  draw_text(TextFormat("%llu new cells  |  %llu sites found",
+            panel_x + 22, py(332), 16);
+  draw_text(TextFormat("%llu cells dug  |  %llu sites found",
                        static_cast<unsigned long long>(view.stats.cells_excavated),
                        static_cast<unsigned long long>(view.stats.sources_found)),
-            panel_x + 22, py(338), 16, kMutedInk);
-  draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, py(359), 16, kMutedInk);
+            panel_x + 22, py(352), 16, kMutedInk);
 
   const std::array<Icon, 4> focus_icons{
       {Icon::Balance, Icon::Growth, Icon::Expansion, Icon::Seed}};
+  const std::array<const char*, 4> focus_names{{"Even", "Brood", "Dig", "Food"}};
   const std::array<const char*, 4> focus_hints{{"Even effort across every job (B)",
                                                 "Tend the brood first (G)",
                                                 "Dig new chambers first (X)",
@@ -1071,15 +1350,22 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
     Rectangle bounds = focus_button_bounds(panel_x, index);
     bounds.y -= panel_scroll_;
     const std::size_t slot = static_cast<std::size_t>(index);
-    if (button(20 + static_cast<std::uint32_t>(index), bounds, "",
+    if (button(20 + static_cast<std::uint32_t>(index), bounds, focus_names[slot],
                static_cast<int>(view.focus) == index, view.focus_available, focus_icons[slot],
                view.focus_available ? focus_hints[slot] : "Unlocks at 12 workers",
-               focus_name(static_cast<sim::Focus>(index)))) {
+               focus_name(static_cast<sim::Focus>(index)), true)) {
       focus_requested_ = static_cast<sim::Focus>(index);
     }
   }
-  DrawLine(panel_x + 20, py(415), width - 20, py(415), kWarmLine);
-  draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,py(419),16,kMutedInk);
+  if (view.focus_cooldown_remaining > 0) {
+    draw_text(TextFormat("Focus settles in %llu s",
+                         static_cast<unsigned long long>(view.focus_cooldown_remaining /
+                                                         sim::kTicksPerSecond) + 1),
+              panel_x + 22, py(424), 13, kMutedInk);
+  }
+  DrawLine(panel_x + 20, py(442), width - 20, py(442), kWarmLine);
+  draw_text(TextFormat("WORK  %lld", static_cast<long long>(view.work)), panel_x + 22, py(446), 16,
+            kMutedInk);
   const std::array<const char*, 4> upgrades{{"Mandibles", "Nursery", "Trails", "Queen"}};
   const std::array<Icon, 4> upgrade_icons{
       {Icon::Mandibles, Icon::Nursery, Icon::Trail, Icon::Queen}};
@@ -1116,8 +1402,12 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
               static_cast<int>(body.x) + 31, static_cast<int>(body.y) + 7, 15, ink);
     const char* price = maxed ? "max" : TextFormat("%lld", static_cast<long long>(cost));
     const Vector2 measured = MeasureTextEx(font_, price, 15.0F, 0.0F);
-    draw_text(price, static_cast<int>(body.x + body.width - measured.x) - 10,
-              static_cast<int>(body.y) + 7, 15, ink);
+    const float price_x = body.x + body.width - measured.x - 10.0F;
+    draw_text(price, static_cast<int>(price_x), static_cast<int>(body.y) + 7, 15, ink);
+    if (!maxed) {
+      draw_icon(Icon::Mandibles, {price_x - 16.0F, body.y + 8.0F, 12.0F, 12.0F},
+                Fade(ink, 0.75F));
+    }
     if (visual.clicked && affordable) upgrade_requested_ = static_cast<game::UpgradeId>(index);
     if (visual.over) {
       tooltip_title_ = upgrades[slot];
@@ -1128,19 +1418,19 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
       tooltip_y_ = body.y;
     }
   }
-  draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,py(576),14,kMutedInk);
   EndScissorMode();
   ui_.set_input_region(!scenes_.modal());
   const int selected_y = static_cast<int>(layout_.selected.y);
   DrawRectangle(panel_x, selected_y, panel_width, 142, kPaperSoft);
   DrawLine(panel_x + 20, selected_y, width - 20, selected_y, kWarmLine);
-  draw_text("SELECTED ANT", panel_x + 22, selected_y + 10, 14, kMutedInk);
   const sim::ActorSnapshot* selected = nullptr;
   for (const auto& actor : view.actors) {
     if (selection_.id() == actor.id) { selected = &actor; break; }
   }
+  draw_text(selected ? "SELECTED ANT" : "RECENT", panel_x + 22, selected_y + 10, 14, kMutedInk);
   if (!selected) {
-    draw_text("Click an ant to inspect it.", panel_x + 22, selected_y + 40, 17);
+    // The space under an empty selection is where the colony says what it has just done.
+    draw_log(panel_x, panel_width, selected_y + 32);
   } else {
     const char* kind = selected->kind == sim::AntKind::Queen ? "Queen" :
                        selected->kind == sim::AntKind::WingedQueen ? "Winged queen" : "Worker";
@@ -1160,6 +1450,52 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
       draw_text(TextFormat("%llu seconds old", static_cast<unsigned long long>(selected->age / sim::kTicksPerSecond)),
                 panel_x + 22, selected_y + 109, 16, kMutedInk);
     }
+  }
+}
+
+void Renderer::draw_readiness(const game::GameView& view, const int panel_x,
+                              const int panel_width, const int top) const {
+  const game::FlightPreview& flight = view.legacy.flight;
+  const int met = (flight.mature ? 1 : 0) + (flight.living_workers >= 100 ? 1 : 0) +
+                  (flight.births >= 150 ? 1 : 0) +
+                  (flight.run_ticks >= 720 * static_cast<unsigned>(sim::kTicksPerSecond) ? 1 : 0) +
+                  (flight.live_winged_queens >= 3 ? 1 : 0);
+  draw_text("FLIGHT READINESS", panel_x + 22, top, 14, kMutedInk);
+  const char* score = TextFormat("%d / 5", met);
+  const Vector2 measured = MeasureTextEx(font_, score, 14.0F, 0.0F);
+  draw_text(score, panel_x + panel_width - 22 - static_cast<int>(measured.x), top, 14,
+            flight.eligible ? Color{104, 142, 96, 255} : kMutedInk);
+  const int bar_y = top + 21;
+  const int bar_width = panel_width - 44;
+  DrawRectangle(panel_x + 22, bar_y, bar_width, 6, Color{214, 200, 170, 255});
+  DrawRectangle(panel_x + 22, bar_y, bar_width * met / 5, 6,
+                flight.eligible ? Color{104, 142, 96, 255} : kFoliage);
+  // The bundled atlas is ASCII only, so an em dash would draw as a question mark.
+  draw_text(flight.eligible ? "Ready - open the Flight panel to send it"
+                            : game::flight_block_reason(flight.block),
+            panel_x + 22, bar_y + 12, 14, kMutedInk);
+}
+
+void Renderer::draw_log(const int panel_x, const int panel_width, const int top) const {
+  if (log_.empty()) {
+    draw_text("Click an ant to inspect it.", panel_x + 22, top, 16, kMutedInk);
+    return;
+  }
+  int line = top;
+  for (const LogEntry& entry : log_) {
+    // Older lines fade rather than vanish, so the list settles instead of flickering.
+    const float weight = std::clamp(1.0F - entry.age / 26.0F, 0.25F, 1.0F);
+    draw_icon(entry.icon, {static_cast<float>(panel_x + 22), static_cast<float>(line) + 2.0F, 13.0F,
+                           13.0F},
+              Fade(kMutedInk, weight));
+    DrawTextEx(font_, truncate_to_width(entry.text, static_cast<float>(panel_width - 66), 16.0F).c_str(),
+               {static_cast<float>(panel_x + 41), static_cast<float>(line)}, 16.0F, 0.0F,
+               Fade(kInk, weight));
+    line += 22;
+  }
+  // A quiet colony leaves room here, so the hint about selecting an ant keeps its place.
+  if (log_.size() < 3) {
+    draw_text("Click an ant to inspect it.", panel_x + 22, line + 8, 16, kMutedInk);
   }
 }
 

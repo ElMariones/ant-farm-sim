@@ -23,7 +23,7 @@ struct ViewTransform {
 
 // The bottom of the last line the colony panel draws, in unscrolled panel coordinates. The layout
 // owns it so the scrollable range and the renderer's content cannot disagree.
-inline constexpr float kPanelContentBottom = 594.0F;
+inline constexpr float kPanelContentBottom = 596.0F;
 
 struct InterfaceLayout {
   UiRect world;

@@ -8,7 +8,32 @@ Updated: 2026-09-07.
 
 M4 completes the generation loop. A colony latches **maturity** at 100 living workers, 150 worker births and 12 simulated minutes; after that one egg in five becomes a **winged queen**, capped at ten live and developing combined. With three winged queens, a living founding queen and an unassisted run, the player can send a **nuptial flight**, which pays Genetic Legacy through a single committed profile revision carrying an immutable receipt. Between colonies, Legacy buys eight permanent trait tiers across Vigor and Industry, and founding the next colony applies the owned traits exactly once.
 
-## Latest session — T014f
+## Latest session — T014g, presentation polish
+
+**The simulation is untouched.** This session changed only the renderer, the interface layout, one
+read-only helper on the view and the opening zoom, so pacing and balance are exactly as the previous
+session measured them.
+
+Ground now reads as layered earth rather than one brown swatch, rooms are baked into the terrain as
+lit chambers, stored food reads as banks of grain, and the underground is warm dark earth instead of
+black. Effects are derived from frame-to-frame changes in the view: soil thrown from a fresh cut,
+a grain set down on a heap, a bloom at the queen when a worker ecloses, a ring when a chamber is
+finished. The inspector gained a flight-readiness bar and a five-line log of what the colony just
+did; the header gained a condition chip and now spreads its counters across the width it has. Ants
+bob as they walk and cast their antennae about, and the selected ant's ring pulses.
+
+Verified on this machine (Apple Silicon macOS, Apple Clang 21), screenshot by screenshot at
+1440x835 with the display unlocked:
+
+- `./build/dev/ant_tests`: **pass, 40,525 assertions in 136 test cases**.
+- Native captures at the opening frame, at 25 and 42 and 50 simulated minutes, of the flight panel,
+  and close-ups of the nest and granary. The panel now fits without scrolling at 1440x835, which is
+  what a 1512x982 laptop screen fits the window to.
+- One defect the captures caught and fixed: the header divided its width by a hardcoded seven
+  regardless of how many counters were shown, leaving a third of it empty. Another: an em dash in
+  the readiness line drew as a question mark, because the bundled atlas is ASCII only.
+
+## Earlier session — T014f
 
 **The colony digs for a reason, and food runs out.** Excavation is no longer wandering faces: every
 cell cut belongs to a room the colony decided it needed — a brood room or a granary — and to the

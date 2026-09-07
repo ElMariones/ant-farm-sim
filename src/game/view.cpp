@@ -1,5 +1,7 @@
 #include "game/view.hpp"
 
+#include <algorithm>
+
 namespace ant::game {
 
 GameView make_view(const Session& session) {
@@ -49,6 +51,19 @@ GameView make_view(const Session& session) {
   view.terrain_revision = world.grid().terrain_revision();
   view.legacy.flight = preview_flight(session);
   return view;
+}
+
+GameView::Watched GameView::watched() const {
+  Watched out;
+  out.workers_born = stats.workers_born;
+  out.gynes_born = stats.gynes_born;
+  out.sources_found = stats.sources_found;
+  out.sources_exhausted = stats.sources_exhausted;
+  out.rooms_built = stats.rooms_built;
+  out.complete_rooms = static_cast<std::size_t>(
+      std::count_if(rooms.begin(), rooms.end(), [](const sim::Room& room) { return room.complete; }));
+  out.upgrade_levels = upgrade_levels;
+  return out;
 }
 
 const char* bottleneck_name(const Bottleneck bottleneck) {
