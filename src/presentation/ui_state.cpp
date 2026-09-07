@@ -33,10 +33,14 @@ void UiState::begin_frame(const float pointer_x, const float pointer_y, const bo
                           const bool pressed, const bool released, const float delta_seconds) {
   pointer_x_ = pointer_x;
   pointer_y_ = pointer_y;
+  press_x_ = pointer_x;
+  press_y_ = pointer_y;
   down_ = down;
   pressed_ = pressed;
   released_ = released;
   delta_seconds_ = delta_seconds;
+  input_enabled_ = true;
+  clip_.reset();
   pointer_over_interface_ = false;
   hovered_id_ = 0;
   // The capture has to survive the release frame, which is the frame a click is reported on.
@@ -56,7 +60,8 @@ WidgetVisual UiState::track(const std::uint32_t id, const UiRect bounds, const b
   Entry& entry = entry_for(id);
   entry.seen = true;
 
-  const bool over = bounds.contains(pointer_x_, pointer_y_);
+  const bool over = input_enabled_ && bounds.contains(pointer_x_, pointer_y_) &&
+                    (!clip_ || clip_->contains(pointer_x_, pointer_y_));
   if (over) pointer_over_interface_ = true;
 
   WidgetVisual visual;
@@ -64,7 +69,9 @@ WidgetVisual UiState::track(const std::uint32_t id, const UiRect bounds, const b
   visual.hovered = over && enabled;
   if (visual.hovered) hovered_id_ = id;
 
-  if (enabled && over && pressed_) captured_id_ = id;
+  const bool press_over = input_enabled_ && bounds.contains(press_x_, press_y_) &&
+                          (!clip_ || clip_->contains(press_x_, press_y_));
+  if (enabled && press_over && pressed_) captured_id_ = id;
   visual.held = enabled && down_ && captured_id_ == id && over;
   // A click completes only where it began, so dragging off a control cancels it.
   visual.clicked = enabled && released_ && captured_id_ == id && over;

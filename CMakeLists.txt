@@ -75,11 +75,13 @@ ant_configure_target(ant_headless)
 if(ANT_BUILD_DESKTOP)
   add_library(ant_presentation
     src/presentation/camera.cpp
+    src/presentation/desktop_input.cpp
     src/presentation/renderer.cpp
     src/presentation/ui_state.cpp
+    src/presentation/interaction.cpp
   )
   target_include_directories(ant_presentation PUBLIC src)
-  target_link_libraries(ant_presentation PUBLIC ant_game raylib)
+  target_link_libraries(ant_presentation PUBLIC ant_game raylib PRIVATE glfw)
   target_compile_definitions(ant_presentation PRIVATE
     ANT_SOURCE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
   )
@@ -120,6 +122,7 @@ if(BUILD_TESTING)
     src/app/save_coordinator.cpp
     src/app/window_size.cpp
     src/presentation/ui_state.cpp
+    src/presentation/interaction.cpp
     tests/unit/asset_paths_tests.cpp
     tests/unit/grid_tests.cpp
     tests/unit/maturity_tests.cpp
@@ -132,6 +135,7 @@ if(BUILD_TESTING)
     tests/unit/save_service_tests.cpp
     tests/unit/snapshot_tests.cpp
     tests/unit/ui_state_tests.cpp
+    tests/unit/interaction_tests.cpp
     tests/unit/task_system_tests.cpp
     tests/unit/window_size_tests.cpp
     tests/unit/world_tests.cpp

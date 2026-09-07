@@ -22,11 +22,8 @@ void CameraController::apply_scale() {
 
 void CameraController::layout(const int screen_width, const int screen_height,
                               const bool inspector_open) {
-  constexpr float kHeaderHeight = 64.0F;
-  constexpr float kFooterHeight = 60.0F;
-  const float inspector_width = screen_width >= 1120 && inspector_open ? 320.0F : 0.0F;
-  viewport_ = {0.0F, kHeaderHeight, static_cast<float>(screen_width) - inspector_width,
-               static_cast<float>(screen_height) - kHeaderHeight - kFooterHeight};
+  const auto bounds = interface_layout(screen_width, screen_height, inspector_open).world;
+  viewport_ = {bounds.x, bounds.y, bounds.width, bounds.height};
   const Vector2 dpi = GetWindowScaleDPI();
   backing_scale_ = std::max(1.0F, std::max(dpi.x, dpi.y));
   minimum_zoom_ = std::max(viewport_.width / static_cast<float>(sim::Grid::kWidth),
@@ -36,21 +33,33 @@ void CameraController::layout(const int screen_width, const int screen_height,
   clamp_target();
 }
 
-void CameraController::update(const float delta_seconds, const bool input_enabled) {
-  if (!input_enabled) {
-    return;
-  }
-
+void CameraController::update(const float delta_seconds, const bool keyboard_enabled,
+                              const bool pointer_owned) {
   const Vector2 mouse = GetMousePosition();
-  if (contains(mouse) &&
-      (IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsMouseButtonDown(MOUSE_BUTTON_MIDDLE) ||
-       IsMouseButtonDown(MOUSE_BUTTON_RIGHT))) {
+  const bool pan_button_down =
+      IsMouseButtonDown(MOUSE_BUTTON_MIDDLE) || IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
+  if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+    pan_captured_ = pointer_owned;
+  }
+  // A pan belongs to whoever the press landed on. Releasing the button is the only thing that ends
+  // it, so dragging out over the inspector or off the window does not drop the gesture.
+  if (!pan_button_down || !keyboard_enabled) {
+    pan_captured_ = false;
+  }
+  if (pan_captured_) {
     const Vector2 delta = GetMouseDelta();
     camera_.target.x -= delta.x / logical_zoom_;
     camera_.target.y -= delta.y / logical_zoom_;
   }
 
+  if (!keyboard_enabled) {
+    clamp_target();
+    return;
+  }
+
   Vector2 keyboard{};
+  const bool save_chord = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL) ||
+                          IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
   if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) {
     keyboard.x -= 1.0F;
   }
@@ -60,13 +69,13 @@ void CameraController::update(const float delta_seconds, const bool input_enable
   if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) {
     keyboard.y -= 1.0F;
   }
-  if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) {
+  if ((!save_chord && IsKeyDown(KEY_S)) || IsKeyDown(KEY_DOWN)) {
     keyboard.y += 1.0F;
   }
   camera_.target.x += keyboard.x * 180.0F * delta_seconds / logical_zoom_;
   camera_.target.y += keyboard.y * 180.0F * delta_seconds / logical_zoom_;
 
-  float wheel = contains(mouse) ? GetMouseWheelMove() : 0.0F;
+  float wheel = pointer_owned ? GetMouseWheelMove() : 0.0F;
   if (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD)) {
     wheel += 1.0F;
   }
@@ -75,9 +84,9 @@ void CameraController::update(const float delta_seconds, const bool input_enable
   }
   if (wheel != 0.0F) {
     const Vector2 logical_pivot =
-        contains(mouse) ? mouse
-                        : Vector2{viewport_.x + viewport_.width * 0.5F,
-                                  viewport_.y + viewport_.height * 0.5F};
+        pointer_owned ? mouse
+                      : Vector2{viewport_.x + viewport_.width * 0.5F,
+                                viewport_.y + viewport_.height * 0.5F};
     const Vector2 pivot{logical_pivot.x * backing_scale_, logical_pivot.y * backing_scale_};
     const Vector2 before = GetScreenToWorld2D(pivot, camera_);
     logical_zoom_ = std::clamp(logical_zoom_ * (1.0F + wheel * 0.12F), minimum_zoom_, 12.0F);
@@ -99,9 +108,22 @@ bool CameraController::contains(const Vector2 screen_position) const {
   return CheckCollisionPointRec(screen_position, viewport_);
 }
 
+Vector2 CameraController::screen_to_world(const Vector2 position) const {
+  const ViewTransform transform{{camera_.target.x, camera_.target.y},
+                                {camera_.offset.x, camera_.offset.y}, camera_.zoom, backing_scale_};
+  const Point world = transform.to_world({position.x, position.y});
+  return {world.x, world.y};
+}
+
+Vector2 CameraController::world_to_screen(const Vector2 position) const {
+  const ViewTransform transform{{camera_.target.x, camera_.target.y},
+                                {camera_.offset.x, camera_.offset.y}, camera_.zoom, backing_scale_};
+  const Point screen = transform.to_screen({position.x, position.y});
+  return {screen.x, screen.y};
+}
+
 sim::GridPos CameraController::screen_to_cell(const Vector2 screen_position) const {
-  const Vector2 world = GetScreenToWorld2D(
-      {screen_position.x * backing_scale_, screen_position.y * backing_scale_}, camera_);
+  const Vector2 world = screen_to_world(screen_position);
   return {static_cast<int>(std::floor(world.x)), static_cast<int>(std::floor(world.y))};
 }
 

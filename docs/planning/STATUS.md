@@ -10,7 +10,7 @@ M4 completes the generation loop. A colony latches **maturity** at 100 living wo
 
 ## Active scope
 
-**Completed: review and next-step design (2026-09-07).** Audited committed work and defined the requested tunnel, movement, appearance, selection and UI improvements. Fresh headless build and CTest pass: 113/113 in 118.60 s; no new native UI review. See [NEXT_STEPS](NEXT_STEPS.md). Next implementation: **T014a — reliable selection and modal input**; then the ordered M5 slices below.
+**In progress: T014a — reliable selection and modal input.** The code is written and covered by tests; the native interaction check that closes the slice is blocked. Shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector are implemented. Simulation and save formats are unchanged. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.
 
 Suggested prompt for a smaller model:
 
@@ -133,6 +133,64 @@ shipped build would have used rather than a source path the player does not have
 
 The `.app` bundle itself, version metadata and the release archive are still open.
 
+### T014a — reliable selection and modal input (implemented, native check outstanding)
+
+New `presentation/interaction.{hpp,cpp}` holds the rules with no raylib dependency, so they run in
+the headless build; `presentation/desktop_input.{hpp,cpp}` holds the GLFW-side event latching.
+
+- **A01 — picking and drawing now share one transform and one pose list.** `ViewTransform` is the
+  camera's own Retina transform with a logical-pixel interface, and `CameraController::screen_to_world`
+  routes through it instead of calling `GetScreenToWorld2D` with unscaled coordinates. `actor_pose`
+  produces the interpolated centre and per-id offset once per frame; the renderer draws that list by
+  index and the picker searches the same list, so a hit box cannot drift from what is on screen.
+  Hit tolerance is at least 8 logical pixels, scaled for queen and winged-queen bodies, and equal
+  distances break by lowest stable id.
+- **A02 — left click selects, right/middle drag pans.** Selection is one owned release gesture:
+  ownership is captured on press, a drag beyond four logical pixels cancels it permanently until the
+  next press, and a press that began on the interface cannot become a world click on release. Pan
+  capture follows the same rule and, once captured, keeps running while the button is held even if
+  the pointer leaves the viewport.
+- **A03 — modal scenes own pointer and keyboard.** `SceneState` resolves the owning scene before
+  dispatch. While a modal is open, `UiState::set_input_region` makes every underlying control inert
+  across the whole backdrop, gameplay shortcuts are not read, the simulation is held, and any capture
+  held across the boundary is cancelled. The scrolling panel body additionally clips input to its own
+  rectangle, so a control scrolled out of view cannot be clicked.
+- **A06 — Escape belongs to the game.** `SetExitKey(KEY_NULL)` disables raylib's bundled default
+  (`exitKey = KEY_ESCAPE` in `rcore.c`), and Escape now closes the top layer or opens a pause menu.
+  Window-close saving is untouched.
+- **A07 — save has its own chord and the generation is real.** Plain `S` only pans; saving is
+  Ctrl/Cmd+S or the footer button. The footer prints `view.legacy.generation` rather than a
+  hardcoded `Generation 1`.
+- **A08 — the panel is laid out from available bounds.** `interface_layout` derives header, world,
+  panel body, selected-ant region and footer from the window size, and the camera viewport is
+  derived from the same function so layout, input and rendering cannot disagree. The panel body
+  scrolls, and `InterfaceLayout::panel_scroll_range` owns exactly how far, so selected-ant details
+  stay above the footer at the 1024x640 minimum.
+- **A11 — selection has a lifecycle.** `AntSelection::synchronize` clears the selection when the run
+  id changes or the actor is gone, and snapshot reordering within a run does not disturb it.
+
+`ant_farm` also now reports plainly when no window could be created instead of letting the first
+component that needs one fail with an unrelated message.
+
+**Verified:** `cmake --build --preset headless` and `--preset dev` and `--preset release` all build
+clean. `ctest --preset headless --output-on-failure -j 4` passes **122/122 in 134.42 s**, including
+the sixty-minute soak; that is 113 previously plus 9 new interaction cases (84 assertions) covering
+the 1x/2x DPI round trip, interpolated pick centres with caste bounds and stable ties, the owned
+release gesture in both drag directions, selection across death and run change, minimum-size layout,
+the scroll range, Escape/recovery scene ownership, modal and clipped input rejection, and a short
+native click that presses and releases in one poll.
+
+**Not verified — the native interaction check is blocked.** The window was opened at 1440x900 and
+photographed with `screencapture` (raylib's `TakeScreenshot` is not trustworthy on this display):
+the new footer, real generation number, status line, upgrade tooltip and the selected-ant region
+above the footer all render correctly. Clicking could not be completed. Automation could not deliver
+an activating click to the raylib window in the background, and the machine's screen then locked, at
+which point GLFW refuses to create a window at all (`Failed to find selected monitor`, `dpi=0x0`) and
+macOS blocks synthetic input. **No ant has been selected in the running app, no pan or modal capture
+has been exercised natively, and the 1024x640 window was not re-photographed.** T014a is not closable
+until that is done with real clicks at both sizes. The interaction rules are unit-tested; the seam
+between GLFW event latching and those rules is exactly what is still unproven.
+
 ### Interface interaction layer (T014, partial)
 
 `UiState` owns pointer state and per-widget hover/press animation, and deliberately has no raylib
@@ -176,7 +234,12 @@ Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. 
 
 ## Open work
 
-Start with T014a. The audit in NEXT_STEPS supersedes the old next-task order. Historical visual reviews below do not establish that current input routing works.
+Finish T014a's native check first: open the app at 1440x900 and 1024x640 with the screen unlocked
+and confirm with real clicks that an ant can be selected while it moves, that a drag beginning on a
+card does not select, that right/middle drag pans while left click does not, that Escape opens and
+closes the pause menu, and that a click on the panel does not reach the world. Then continue with
+the ordered M5 slices. The audit in NEXT_STEPS supersedes the old next-task order. Historical visual
+reviews below do not establish that current input routing works.
 
 - **The surface view was not re-photographed after the final art pass.** The window server stopped accepting new windows partway through review (`GLFW: Failed to determine Monitor to center Window`), so the last captures are of the nursery at zoom 11, which does show the reworked ants, brood, queen and terrain. The surface, food sources and foraging column at mid zoom were reviewed before the final colour and limb-tone tweaks but not after them.
 - **Keyboard activation was not exercised interactively.** The flight, trait and found-colony key handlers were verified through unit tests against a real `SaveService` and their panels were rendered and photographed, but this session had no way to send key presses to the raylib window. The same limitation applies to the recovery prompt's `R`/`N` keys from M3.

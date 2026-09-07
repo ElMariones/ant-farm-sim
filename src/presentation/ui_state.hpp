@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <optional>
 
 // Deliberately free of raylib so the interaction rules can be tested in the headless build.
 namespace ant::presentation {
@@ -37,6 +38,13 @@ public:
   // Registers an interactive region and reports how to draw it. A click is reported on release
   // over the same widget that was pressed, which is what a desktop control should do.
   [[nodiscard]] WidgetVisual track(std::uint32_t id, UiRect bounds, bool enabled = true);
+  // Scene and clipping ownership are resolved before tracking controls. Hidden controls cannot
+  // receive hover/press/release even if their unscrolled rectangle covers the pointer.
+  void set_input_region(bool enabled, std::optional<UiRect> clip = {}) {
+    input_enabled_ = enabled; clip_ = clip;
+  }
+  void set_press_origin(float x, float y) { press_x_ = x; press_y_ = y; }
+  void cancel_capture() { captured_id_ = 0; }
   // True when the pointer is over any widget registered this frame, so the world can ignore it.
   [[nodiscard]] bool pointer_over_interface() const { return pointer_over_interface_; }
   [[nodiscard]] bool any_hovered() const { return hovered_id_ != 0; }
@@ -56,6 +64,10 @@ private:
   float pointer_x_{};
   float pointer_y_{};
   float delta_seconds_{};
+  float press_x_{};
+  float press_y_{};
+  bool input_enabled_{true};
+  std::optional<UiRect> clip_;
   bool down_{};
   bool pressed_{};
   bool released_{};

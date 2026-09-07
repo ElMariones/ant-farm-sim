@@ -222,70 +222,93 @@ Rectangle focus_button_bounds(const int panel_x, const int index) {
   return {static_cast<float>(panel_x + 18 + index * 70), kFocusButtonTop, 64.0F, 29.0F};
 }
 
+
 } // namespace
 
 void Renderer::update_input(const float delta_seconds) {
-  const int width = GetScreenWidth();
-  const int height = GetScreenHeight();
-  camera_.layout(width, height, inspector_open_);
-  camera_.update(delta_seconds, true);
-
-  if (IsKeyPressed(KEY_SPACE)) {
-    toggle_pause_requested_ = true;
-  }
-  if (IsKeyPressed(KEY_ONE)) {
-    speed_requested_ = 1;
-  } else if (IsKeyPressed(KEY_TWO)) {
-    speed_requested_ = 5;
-  } else if (IsKeyPressed(KEY_THREE)) {
-    speed_requested_ = 20;
-  }
-  if (IsKeyPressed(KEY_I)) {
+  const DesktopFrame input = desktop_input_.take_frame();
+  const auto key_pressed = [&input](const int key) { return input.keys[static_cast<std::size_t>(key)]; };
+  if (inspector_toggle_requested_) {
     inspector_open_ = !inspector_open_;
-    camera_.layout(width, height, inspector_open_);
+    inspector_toggle_requested_ = false;
+    ui_.cancel_capture();
+    world_click_.cancel();
   }
-  if (IsKeyPressed(KEY_F1)) upgrade_requested_ = game::UpgradeId::Excavation;
-  else if (IsKeyPressed(KEY_F2)) upgrade_requested_ = game::UpgradeId::Nursing;
-  else if (IsKeyPressed(KEY_F3)) upgrade_requested_ = game::UpgradeId::Foraging;
-  else if (IsKeyPressed(KEY_F4)) upgrade_requested_ = game::UpgradeId::Queen;
-  if (IsKeyPressed(KEY_B)) focus_requested_ = sim::Focus::Balanced;
-  else if (IsKeyPressed(KEY_G)) focus_requested_ = sim::Focus::Growth;
-  else if (IsKeyPressed(KEY_X)) focus_requested_ = sim::Focus::Expansion;
-  else if (IsKeyPressed(KEY_F)) focus_requested_ = sim::Focus::Foraging;
-  if (IsKeyPressed(KEY_S)) save_requested_ = true;
-  if (!recovery_prompt_) {
-    if (IsKeyPressed(KEY_L)) legacy_panel_open_ = !legacy_panel_open_;
-    if (legacy_panel_open_) {
-      if (IsKeyPressed(KEY_ENTER)) flight_requested_ = true;
-      if (IsKeyPressed(KEY_V)) trait_requested_ = game::TraitBranch::Vigor;
-      if (IsKeyPressed(KEY_Y)) trait_requested_ = game::TraitBranch::Industry;
-      if (IsKeyPressed(KEY_C)) new_run_requested_ = true;
-      if (IsKeyPressed(KEY_ESCAPE)) legacy_panel_open_ = false;
-    }
+  const Scene before = scenes_.scene();
+  if (key_pressed(KEY_ESCAPE)) scenes_.escape();
+  else if (key_pressed(KEY_L)) scenes_.toggle_legacy();
+  const bool transitioned = before != scenes_.scene() || input_scene_ != scenes_.scene();
+  input_scene_ = scenes_.scene();
+  if (transitioned) {
+    clear_requests();
+    ui_.cancel_capture();
+    world_click_.cancel();
   }
-  if (recovery_prompt_) {
-    if (IsKeyPressed(KEY_R)) recover_requested_ = true;
-    if (IsKeyPressed(KEY_N)) new_colony_requested_ = true;
-  }
-
   const Vector2 mouse = GetMousePosition();
-  ui_.begin_frame(mouse.x, mouse.y, IsMouseButtonDown(MOUSE_BUTTON_LEFT),
-                  IsMouseButtonPressed(MOUSE_BUTTON_LEFT), IsMouseButtonReleased(MOUSE_BUTTON_LEFT),
-                  delta_seconds);
+  const bool colony = !scenes_.modal() && !transitioned;
+  if (colony && key_pressed(KEY_I)) inspector_open_ = !inspector_open_;
+  layout_ = interface_layout(GetScreenWidth(), GetScreenHeight(), inspector_open_);
+  camera_.layout(GetScreenWidth(), GetScreenHeight(), inspector_open_);
+  const bool world_owned = colony && layout_.owns_world({mouse.x, mouse.y});
+  // The camera answers to the keyboard for as long as the colony owns input, but only takes the
+  // pointer when the pointer is actually over the world.
+  camera_.update(delta_seconds, colony, world_owned);
+  if (input.pressed) {
+    static_cast<void>(world_click_.update(input.origin, true, true, false,
+        colony && layout_.owns_world(input.origin)));
+  }
+  if (input.travel_squared > 16.0F) world_click_.cancel();
+  select_requested_ = world_click_.update({mouse.x, mouse.y}, false, input.down,
+      input.released, world_owned && !IsMouseButtonDown(MOUSE_BUTTON_MIDDLE) &&
+      !IsMouseButtonDown(MOUSE_BUTTON_RIGHT));
+  if (select_requested_) select_point_ = {mouse.x, mouse.y};
+  if (colony && layout_.panel_body.contains(mouse.x, mouse.y)) {
+    panel_scroll_ -= GetMouseWheelMove() * 36.0F;
+  }
+  panel_scroll_ = std::clamp(panel_scroll_, 0.0F, layout_.panel_scroll_range());
+  if (colony) {
+    if (key_pressed(KEY_SPACE)) toggle_pause_requested_ = true;
+    if (key_pressed(KEY_ONE)) speed_requested_ = 1;
+    else if (key_pressed(KEY_TWO)) speed_requested_ = 5;
+    else if (key_pressed(KEY_THREE)) speed_requested_ = 20;
+    if (key_pressed(KEY_F1)) upgrade_requested_ = game::UpgradeId::Excavation;
+    else if (key_pressed(KEY_F2)) upgrade_requested_ = game::UpgradeId::Nursing;
+    else if (key_pressed(KEY_F3)) upgrade_requested_ = game::UpgradeId::Foraging;
+    else if (key_pressed(KEY_F4)) upgrade_requested_ = game::UpgradeId::Queen;
+    if (key_pressed(KEY_B)) focus_requested_ = sim::Focus::Balanced;
+    else if (key_pressed(KEY_G)) focus_requested_ = sim::Focus::Growth;
+    else if (key_pressed(KEY_X)) focus_requested_ = sim::Focus::Expansion;
+    else if (key_pressed(KEY_F)) focus_requested_ = sim::Focus::Foraging;
+    if (input.save_chord) save_requested_ = true;
+  } else if (!transitioned && scenes_.scene() == Scene::Legacy) {
+    if (key_pressed(KEY_ENTER)) flight_requested_ = true;
+    if (key_pressed(KEY_V)) trait_requested_ = game::TraitBranch::Vigor;
+    if (key_pressed(KEY_Y)) trait_requested_ = game::TraitBranch::Industry;
+    if (key_pressed(KEY_C)) new_run_requested_ = true;
+  } else if (scenes_.scene() == Scene::Recovery) {
+    if (key_pressed(KEY_R)) recover_requested_ = true;
+    if (key_pressed(KEY_N)) new_colony_requested_ = true;
+  }
+  ui_.begin_frame(mouse.x, mouse.y, input.down,
+                  !transitioned && input.pressed, !transitioned && input.released, delta_seconds);
+  ui_.set_press_origin(input.origin.x, input.origin.y);
+  if (input.travel_squared > 16.0F) ui_.cancel_capture();
 }
 
 void Renderer::draw(const game::GameView& view, const double interpolation_alpha, const bool paused,
                     const int speed, const bool simulation_limited) {
-  update_selection(view);
+  update_selection(view, interpolation_alpha);
+  ui_.set_input_region(!scenes_.modal());
   tooltip_title_ = nullptr;
   ClearBackground(kDeepSoil);
-  draw_world(view, interpolation_alpha);
+  draw_world(view);
   draw_interface(view, paused, speed, simulation_limited);
-  if (tooltip_title_ != nullptr && !legacy_panel_open_ && !recovery_prompt_) {
+  if (tooltip_title_ != nullptr && !scenes_.modal()) {
     draw_tooltip(tooltip_title_, tooltip_body_.c_str(), tooltip_x_, tooltip_y_);
   }
-  if (legacy_panel_open_) draw_legacy_panel(view);
-  if (recovery_prompt_) draw_recovery_prompt();
+  if (legacy_panel_open()) draw_legacy_panel(view);
+  if (scenes_.scene() == Scene::Recovery) draw_recovery_prompt();
+  if (scenes_.scene() == Scene::PauseMenu) draw_pause_menu();
 }
 
 void Renderer::draw_legacy_panel(const game::GameView& view) const {
@@ -481,7 +504,7 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
   terrain_revision_ = view.terrain_revision;
 }
 
-void Renderer::draw_world(const game::GameView& view, const double interpolation_alpha) {
+void Renderer::draw_world(const game::GameView& view) {
   refresh_terrain_texture(view);
   BeginMode2D(camera_.camera());
 
@@ -574,11 +597,13 @@ void Renderer::draw_world(const game::GameView& view, const double interpolation
   // Dropping it wholesale is safe: a moving ant re-derives its heading on the very next frame.
   if (heading_.size() > view.actors.size() * 4 + 64) heading_.clear();
 
-  for (const sim::ActorSnapshot& actor : view.actors) {
+  // Drawn and picked poses are the same list, indexed together, so the two cannot drift apart.
+  for (std::size_t index = 0; index < view.actors.size(); ++index) {
+    const sim::ActorSnapshot& actor = view.actors[index];
     if (actor.kind == sim::AntKind::Queen && !view.queen_alive) {
       continue;
     }
-    draw_ant(actor, interpolation_alpha, camera_.zoom(), selected_id_ == actor.id);
+    draw_ant(actor, poses_[index], camera_.zoom(), selection_.id() == actor.id);
   }
 
   EndMode2D();
@@ -600,21 +625,15 @@ float Renderer::heading_for(const sim::ActorSnapshot& actor, const float dx, con
   return heading;
 }
 
-void Renderer::draw_ant(const sim::ActorSnapshot& actor, const double interpolation_alpha,
+void Renderer::draw_ant(const sim::ActorSnapshot& actor, const ActorPose& pose,
                         const float zoom, const bool selected) {
-  const float alpha = static_cast<float>(std::clamp(interpolation_alpha, 0.0, 1.0));
-  float x = static_cast<float>(actor.previous_x + (actor.x - actor.previous_x) * alpha);
-  float y = static_cast<float>(actor.previous_y + (actor.y - actor.previous_y) * alpha);
-  x += static_cast<float>(static_cast<int>((actor.id * 17ULL) % 7ULL) - 3) * 0.09F;
-  y += static_cast<float>(static_cast<int>((actor.id * 11ULL) % 5ULL) - 2) * 0.08F;
-
   const float heading = heading_for(actor, static_cast<float>(actor.x - actor.previous_x),
                                     static_cast<float>(actor.y - actor.previous_y));
   const bool winged = actor.kind == sim::AntKind::WingedQueen;
   const bool royal = actor.kind == sim::AntKind::Queen;
-  const float scale = royal ? 2.0F : winged ? 1.45F : 1.0F;
+  const float scale = pose.scale;
   const Color body = royal || winged ? kQueenChitin : kChitin;
-  const Vector2 centre{x, y};
+  const Vector2 centre{pose.centre.x, pose.centre.y};
 
   if (selected) {
     DrawCircleLinesV(centre, 2.8F * scale, kSelection);
@@ -730,7 +749,6 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const double interpolat
 void Renderer::draw_interface(const game::GameView& view, const bool paused, const int speed,
                               const bool simulation_limited) {
   const int width = GetScreenWidth();
-  const int height = GetScreenHeight();
   const int worker_count = static_cast<int>(std::count_if(
       view.actors.begin(), view.actors.end(), [](const sim::ActorSnapshot& actor) {
         return actor.kind == sim::AntKind::Worker;
@@ -740,7 +758,7 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text("ANT FARM", 22, 15, 27);
   draw_text("LIVING COLONY", 23, 44, 13, kMutedInk);
   const int metric_start = width >= 1180 ? 190 : 170;
-  const int metric_width = width >= 1180 ? 145 : 125;
+  const int metric_width = (width - metric_start - 16) / 7;
   std::vector<std::pair<const char*, std::string>> metrics{
       {"WORKERS", std::to_string(worker_count)}, {"BROOD", std::to_string(view.brood.size())},
       {"CARBS", TextFormat("%lld", static_cast<long long>(view.stores.carbohydrate / 1000))},
@@ -760,33 +778,38 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
     draw_text(metrics[index].second.c_str(), x, 32, 23);
   }
 
-  const float footer_y = static_cast<float>(height - 60);
-  DrawRectangle(0, height - 60, width, 60, kPaperSoft);
-  DrawLine(0, height - 60, width, height - 60, kWarmLine);
+  const float footer_y = layout_.footer.y;
+  DrawRectangle(0, static_cast<int>(footer_y), width, 88, kPaperSoft);
+  DrawLine(0, static_cast<int>(footer_y), width, static_cast<int>(footer_y), kWarmLine);
   const auto footer_button = [&](const std::uint32_t id, const Rectangle bounds, const char* label,
                                 const bool active) {
     const WidgetVisual visual = ui_.track(id, {bounds.x, bounds.y, bounds.width, bounds.height});
     draw_button(bounds, label, active, visual);
     return visual.clicked;
   };
-  if (footer_button(1, {18.0F, footer_y + 9.0F, 94.0F, 42.0F}, paused ? "Resume" : "Pause", paused)) {
+  if (footer_button(1, {18, footer_y + 8, 94, 40}, paused ? "Resume" : "Pause", paused))
     toggle_pause_requested_ = true;
+  if (footer_button(2, {130, footer_y + 8, 58, 40}, "1x", speed == 1)) speed_requested_ = 1;
+  if (footer_button(3, {194, footer_y + 8, 58, 40}, "5x", speed == 5)) speed_requested_ = 5;
+  if (footer_button(4, {258, footer_y + 8, 58, 40}, "20x", speed == 20)) speed_requested_ = 20;
+  if (footer_button(5, {330, footer_y + 8, 78, 40}, "Save", false)) save_requested_ = true;
+  draw_text(TextFormat("Generation %llu", static_cast<unsigned long long>(view.legacy.generation)),
+            430, static_cast<int>(footer_y) + 18, 18);
+  if (footer_button(6, {static_cast<float>(width - 216), footer_y + 8, 92, 40}, "Flight", false)) {
+    scenes_.open_legacy();
+    ui_.cancel_capture();
+    world_click_.cancel();
+    ui_.set_input_region(false);
   }
-  if (footer_button(2, {130.0F, footer_y + 9.0F, 58.0F, 42.0F}, "1x", speed == 1)) speed_requested_ = 1;
-  if (footer_button(3, {194.0F, footer_y + 9.0F, 58.0F, 42.0F}, "5x", speed == 5)) speed_requested_ = 5;
-  if (footer_button(4, {258.0F, footer_y + 9.0F, 58.0F, 42.0F}, "20x", speed == 20)) speed_requested_ = 20;
-  if (footer_button(5, {330.0F, footer_y + 9.0F, 78.0F, 42.0F}, "Save", false)) save_requested_ = true;
-  draw_text("Generation 1", 430, height - 39, 18);
-  if (!status_line_.empty() && width >= 1100) {
-    // Stop a long failure message from running into the control hints on the right.
-    const float available = static_cast<float>((width >= 1200 ? width - 540 : width - 20) - 560);
-    draw_text(truncate_to_width(status_line_, available, 16.0F).c_str(), 560, height - 39, 16,
-              kMutedInk);
+  if (footer_button(7, {static_cast<float>(width - 112), footer_y + 8, 94, 40}, "Colony", inspector_open_)) {
+    // Apply next frame, together with camera/layout and input ownership.
+    inspector_toggle_requested_ = true;
   }
-  if (width >= 1200) {
-    draw_text("Drag to pan  |  Scroll to zoom  |  Click an ant", width - 530, height - 39, 17,
-              kMutedInk);
-  }
+  const std::string status = status_line_.empty()
+      ? "Left click selects | Right/middle drag pans | Scroll zooms | Esc menu"
+      : status_line_;
+  draw_text(truncate_to_width(status, static_cast<float>(width - 36), 16).c_str(),
+            18, static_cast<int>(footer_y) + 61, 16, kMutedInk);
 
   if (simulation_limited) {
     DrawRectangle(width / 2 - 110, 66, 220, 34, Color{238, 228, 204, 235});
@@ -799,40 +822,47 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   }
   const int panel_width = width >= 1120 ? 320 : 300;
   const int panel_x = width - panel_width;
-  DrawRectangle(panel_x - 7, 72, 7, height - 132, Color{37, 45, 40, 35});
-  DrawRectangle(panel_x, 72, panel_width, height - 132, kPaperSoft);
+  DrawRectangle(panel_x - 7, 72, 7, static_cast<int>(layout_.panel.height), Color{37, 45, 40, 35});
+  DrawRectangle(panel_x, 72, panel_width, static_cast<int>(layout_.panel.height), kPaperSoft);
   draw_text("COLONY", panel_x + 22, 92, 15, kMutedInk);
+  if (layout_.panel_scroll_range() > 0.0F)
+    draw_text("Scroll for more", width - 134, 92, 14, kMutedInk);
+  const auto py = [this](const int y) { return y - static_cast<int>(panel_scroll_); };
+  BeginScissorMode(static_cast<int>(layout_.panel_body.x), static_cast<int>(layout_.panel_body.y),
+                   static_cast<int>(layout_.panel_body.width), static_cast<int>(layout_.panel_body.height));
+  ui_.set_input_region(!scenes_.modal(), layout_.panel_body);
   const char* condition = view.extinct ? "The colony is still" : view.decline ? "The queen is gone" :
                           view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity) ? "Nursery is full" :
                           view.stores.protein < 10'000 ? "Protein is running low" : "Growing steadily";
-  draw_text(condition, panel_x + 22, 116, 22, view.decline ? kProtein : kInk);
+  draw_text(condition, panel_x + 22, py(116), 22, view.decline ? kProtein : kInk);
   draw_text(TextFormat("%d workers tending %zu brood", worker_count, view.brood.size()),
-            panel_x + 22, 148, 16, kMutedInk);
+            panel_x + 22, py(148), 16, kMutedInk);
 
-  const Rectangle nursery_card{static_cast<float>(panel_x + 16), 180.0F,
+  const Rectangle nursery_card{static_cast<float>(panel_x + 16), static_cast<float>(py(180)),
                                 static_cast<float>(panel_width - 32), 88.0F};
   DrawRectangleRounded(nursery_card, 0.12F, 6, kPaper);
   DrawRectangleRoundedLinesEx(nursery_card, 0.12F, 6, 1.0F, kWarmLine);
-  draw_text("NURSERY", panel_x + 30, 195, 13, kMutedInk);
+  draw_text("NURSERY", panel_x + 30, py(195), 13, kMutedInk);
   draw_text(TextFormat("%zu of %d spaces", view.brood.size(), view.nursery_capacity),
-            panel_x + 30, 216, 19);
+            panel_x + 30, py(216), 19);
   const float ratio = view.nursery_capacity == 0 ? 0.0F : std::min(1.0F, static_cast<float>(view.brood.size()) / static_cast<float>(view.nursery_capacity));
-  DrawRectangle(panel_x + 30, 247, panel_width - 60, 7, Color{214, 200, 170, 255});
-  DrawRectangle(panel_x + 30, 247, static_cast<int>(static_cast<float>(panel_width - 60) * ratio), 7, kFoliage);
+  DrawRectangle(panel_x + 30, py(247), panel_width - 60, 7, Color{214, 200, 170, 255});
+  DrawRectangle(panel_x + 30, py(247), static_cast<int>(static_cast<float>(panel_width - 60) * ratio), 7, kFoliage);
 
-  draw_text("COLONY ACTIVITY", panel_x + 22, 292, 14, kMutedInk);
+  draw_text("COLONY ACTIVITY", panel_x + 22, py(292), 14, kMutedInk);
   draw_text(TextFormat("Forage %u   Dig %u   Nurse %u", view.tasks.workers_by_task[0],
                        view.tasks.workers_by_task[1], view.tasks.workers_by_task[2]),
-            panel_x + 22, 317, 16);
+            panel_x + 22, py(317), 16);
   draw_text(TextFormat("%llu new cells  |  %llu births",
                        static_cast<unsigned long long>(view.stats.cells_excavated),
                        static_cast<unsigned long long>(view.stats.workers_born)),
-            panel_x + 22, 338, 16, kMutedInk);
-  draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, 359, 16, kMutedInk);
+            panel_x + 22, py(338), 16, kMutedInk);
+  draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, py(359), 16, kMutedInk);
 
   const std::array<const char*,4> focus_labels{{"Bal","Grow","Expand","Food"}};
   for (int index = 0; index < 4; ++index) {
-    const Rectangle bounds = focus_button_bounds(panel_x, index);
+    Rectangle bounds = focus_button_bounds(panel_x, index);
+    bounds.y -= panel_scroll_;
     const WidgetVisual visual =
         ui_.track(20 + static_cast<std::uint32_t>(index),
                   {bounds.x, bounds.y, bounds.width, bounds.height}, view.focus_available);
@@ -846,15 +876,16 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
       tooltip_y_ = bounds.y;
     }
   }
-  DrawLine(panel_x + 20, 415, width - 20, 415, kWarmLine);
-  draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,419,16,kMutedInk);
+  DrawLine(panel_x + 20, py(415), width - 20, py(415), kWarmLine);
+  draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,py(419),16,kMutedInk);
   const std::array<const char*,4> upgrades{{"Mandibles","Nursery","Trails","Queen"}};
   const std::array<const char*, 4> upgrade_effects{{"+25% dig rate per level",
                                                     "-10% brood time per level",
                                                     "+20% carry per level",
                                                     "-15% laying time per level"}};
   for (int index = 0; index < 4; ++index) {
-    const Rectangle card = upgrade_card_bounds(panel_x, panel_width, index);
+    Rectangle card = upgrade_card_bounds(panel_x, panel_width, index);
+    card.y -= panel_scroll_;
     const std::int64_t cost = view.upgrade_costs[static_cast<std::size_t>(index)];
     const bool maxed = cost < 0;
     const bool affordable = !maxed && view.work >= cost;
@@ -892,77 +923,68 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
       tooltip_y_ = body.y;
     }
   }
-  draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,576,14,kMutedInk);
-  /* Selection stays available in the world; temporary M3 cards occupy the inspector detail area. */
-
-  if (height < 720) return;
-  DrawLine(panel_x + 20, 596, width - 20, 596, kWarmLine);
-  draw_text("SELECTED", panel_x + 22, 606, 13, kMutedInk);
+  draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,py(576),14,kMutedInk);
+  EndScissorMode();
+  ui_.set_input_region(!scenes_.modal());
+  const int selected_y = static_cast<int>(layout_.selected.y);
+  DrawRectangle(panel_x, selected_y, panel_width, 142, kPaperSoft);
+  DrawLine(panel_x + 20, selected_y, width - 20, selected_y, kWarmLine);
+  draw_text("SELECTED ANT", panel_x + 22, selected_y + 10, 14, kMutedInk);
   const sim::ActorSnapshot* selected = nullptr;
-  for (const sim::ActorSnapshot& actor : view.actors) {
-    if (selected_id_ == actor.id) { selected = &actor; break; }
+  for (const auto& actor : view.actors) {
+    if (selection_.id() == actor.id) { selected = &actor; break; }
   }
-  if (selected == nullptr) {
-    draw_text("Click an ant to follow its work.", panel_x + 22, 630, 16, kMutedInk);
+  if (!selected) {
+    draw_text("Click an ant to inspect it.", panel_x + 22, selected_y + 40, 17);
   } else {
-    const char* kind = selected->kind == sim::AntKind::Queen      ? "Queen"
-                       : selected->kind == sim::AntKind::WingedQueen ? "Winged queen"
-                                                                     : "Worker";
-    draw_text(TextFormat("%s  #%llu", kind, static_cast<unsigned long long>(selected->id)),
-              panel_x + 22, 628, 19);
+    const char* kind = selected->kind == sim::AntKind::Queen ? "Queen" :
+                       selected->kind == sim::AntKind::WingedQueen ? "Winged queen" : "Worker";
+    draw_text(kind, panel_x + 22, selected_y + 32, 20);
+    const char* activity = selected->kind == sim::AntKind::Worker ? sim::task_name(selected->task) :
+                           selected->kind == sim::AntKind::WingedQueen ? "Waiting for the flight" : "Founding queen";
+    draw_text(activity, panel_x + 22, selected_y + 60, 17);
     if (selected->kind == sim::AntKind::Worker) {
-      draw_text(sim::task_name(selected->task), panel_x + 22, 654, 17);
-      const char* carried =
-          selected->cargo_amount <= 0 ? "Carrying nothing"
-          : selected->cargo_kind == sim::CargoKind::Spoil  ? "Carrying spoil to the surface"
-          : selected->cargo_kind == sim::CargoKind::Corpse ? "Carrying a fallen sister"
-          : TextFormat("Carrying %lld %s", static_cast<long long>(selected->cargo_amount / 1000),
-                       nutrient_name(selected->cargo_nutrient));
-      draw_text(carried, panel_x + 22, 677, 15, kMutedInk);
-      draw_text(TextFormat("%llu seconds old",
-                          static_cast<unsigned long long>(selected->age / sim::kTicksPerSecond)),
-                panel_x + 22, 697, 15, kMutedInk);
-    } else if (selected->kind == sim::AntKind::WingedQueen) {
-      draw_text("Waiting for the flight", panel_x + 22, 654, 17);
-      draw_text("Does not work or forage", panel_x + 22, 677, 15, kMutedInk);
-    } else {
-      draw_text(view.queen_alive ? "Laying and well tended" : "Deceased", panel_x + 22, 654, 17);
-      draw_text("The colony ends with her", panel_x + 22, 677, 15, kMutedInk);
+      const char* cargo = selected->cargo_amount <= 0 ? "Carrying nothing" :
+          selected->cargo_kind == sim::CargoKind::Spoil ? "Carrying spoil" :
+          selected->cargo_kind == sim::CargoKind::Corpse ? "Carrying a fallen sister" :
+          TextFormat("Carrying %lld %s", static_cast<long long>(selected->cargo_amount / 1000),
+                     nutrient_name(selected->cargo_nutrient));
+      draw_text(cargo, panel_x + 22, selected_y + 85, 16, kMutedInk);
+      draw_text(TextFormat("%llu seconds old", static_cast<unsigned long long>(selected->age / sim::kTicksPerSecond)),
+                panel_x + 22, selected_y + 109, 16, kMutedInk);
     }
   }
 }
 
-void Renderer::update_selection(const game::GameView& view) {
-  // Accept release as well as press so very short native clicks are not lost between render frames.
-  if (!IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-    return;
+void Renderer::update_selection(const game::GameView& view, const double interpolation_alpha) {
+  poses_.clear();
+  poses_.reserve(view.actors.size());
+  for (const auto& actor : view.actors) poses_.push_back(actor_pose(actor, interpolation_alpha));
+  selection_.synchronize(run_id_, poses_);
+  if (select_requested_ && !scenes_.modal()) {
+    const Vector2 world = camera_.screen_to_world({select_point_.x, select_point_.y});
+    selection_.pick(poses_, {world.x, world.y}, camera_.zoom());
   }
-  const Vector2 mouse = GetMousePosition();
-  if (!camera_.contains(mouse)) {
-    return;
-  }
-  const int width = GetScreenWidth();
-  if (inspector_open_ && width < 1120 && mouse.x >= static_cast<float>(width - 300)) {
-    return;
-  }
-  const Vector2 world = GetScreenToWorld2D(mouse, camera_.camera());
-  const double pick_radius = std::max(1.8, 8.0 / static_cast<double>(camera_.zoom()));
-  const sim::ActorSnapshot* best = nullptr;
-  double best_distance = pick_radius * pick_radius;
-  for (const sim::ActorSnapshot& actor : view.actors) {
-    const double dx = actor.x - static_cast<double>(world.x);
-    const double dy = actor.y - static_cast<double>(world.y);
-    const double distance = dx * dx + dy * dy;
-    if (distance <= best_distance) {
-      best_distance = distance;
-      best = &actor;
-    }
-  }
-  if (best != nullptr) {
-    selected_id_ = best->id;
-  } else {
-    selected_id_.reset();
-  }
+  select_requested_ = false;
+}
+
+void Renderer::draw_pause_menu() {
+  const int width = GetScreenWidth(), height = GetScreenHeight();
+  DrawRectangle(0, 0, width, height, Color{24, 28, 25, 180});
+  const Rectangle panel{static_cast<float>(width / 2 - 210),
+                        static_cast<float>(height / 2 - 120), 420, 240};
+  DrawRectangleRounded(panel, 0.08F, 8, kPaper);
+  draw_text("Paused", width / 2 - 178, height / 2 - 90, 25);
+  draw_text("Escape closes this menu", width / 2 - 178, height / 2 - 52, 17, kMutedInk);
+  ui_.set_input_region(true);
+  const Rectangle resume{panel.x + 30, panel.y + 112, 360, 40};
+  const auto resume_visual = ui_.track(100, {resume.x, resume.y, resume.width, resume.height});
+  draw_button(resume, "Return to colony", false, resume_visual);
+  if (resume_visual.clicked) { scenes_.close(); ui_.cancel_capture(); world_click_.cancel(); }
+  const Rectangle save{panel.x + 30, panel.y + 166, 360, 40};
+  const auto save_visual = ui_.track(101, {save.x, save.y, save.width, save.height});
+  draw_button(save, "Save colony", false, save_visual);
+  if (save_visual.clicked) save_requested_ = true;
 }
 
 void Renderer::clear_requests() {

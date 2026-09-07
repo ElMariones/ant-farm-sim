@@ -252,7 +252,14 @@ int main(const int argc, char** argv) {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI | FLAG_MSAA_4X_HINT);
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(initial_size.width, initial_size.height, "Ant Farm Sim — Living Colony");
+    // A locked screen or an unavailable display leaves GLFW without a window. Say that plainly
+    // here, rather than letting the first thing that needs the window report a confusing failure.
+    if (!IsWindowReady()) {
+      throw std::runtime_error(
+          "could not open a game window; the display may be locked or unavailable");
+    }
     SetWindowMinSize(1024, 640);
+    SetExitKey(KEY_NULL);
     const int monitor = GetCurrentMonitor();
     SetTargetFPS(options.target_fps);
     if (options.display_metrics) {
@@ -404,6 +411,8 @@ int main(const int argc, char** argv) {
               adopt(identity, *result.profile);
               session.emplace(ant::game::Session::restore(*result.profile->run));
               between_runs = false;
+              renderer.close_panels();
+              renderer.set_run_id(identity.run_id);
               paused = false;
               saves.set_status("A new colony is founded");
             } else {
@@ -422,7 +431,7 @@ int main(const int argc, char** argv) {
       if (due != ant::app::SaveTrigger::None) commit(due);
 
       simulation_limited = false;
-      if (!paused && !recovery_prompt && !between_runs) {
+      if (!paused && !renderer.modal_open() && !recovery_prompt && !between_runs) {
         if (raw_delta > 0.5F) {
           accumulator = 0.0;
           simulation_limited = true;
@@ -453,8 +462,9 @@ int main(const int argc, char** argv) {
       const ant::game::FlightPreview flight = view.legacy.flight;
       view.legacy = legacy_view(identity, between_runs);
       view.legacy.flight = flight;
+      renderer.set_run_id(identity.run_id);
       BeginDrawing();
-      renderer.draw(view, accumulator / 0.05, paused, speed, simulation_limited);
+      renderer.draw(view, accumulator / 0.05, paused || renderer.modal_open(), speed, simulation_limited);
       EndDrawing();
 
       if (options.display_metrics && rendered_frames == 20) {

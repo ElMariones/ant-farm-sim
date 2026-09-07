@@ -4,6 +4,8 @@
 #include "game/progression.hpp"
 #include "presentation/camera.hpp"
 #include "presentation/ui_state.hpp"
+#include "presentation/interaction.hpp"
+#include "presentation/desktop_input.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -33,40 +35,45 @@ public:
   [[nodiscard]] bool flight_requested() const { return flight_requested_; }
   [[nodiscard]] bool new_run_requested() const { return new_run_requested_; }
   [[nodiscard]] std::optional<game::TraitBranch> trait_requested() const { return trait_requested_; }
-  [[nodiscard]] bool legacy_panel_open() const { return legacy_panel_open_; }
+  [[nodiscard]] bool legacy_panel_open() const { return scenes_.scene() == Scene::Legacy; }
   [[nodiscard]] bool new_colony_requested() const { return new_colony_requested_; }
   void clear_requests();
   // Short save/recovery line shown in the footer, owned by the app coordinator.
   void set_status_line(std::string status) { status_line_ = std::move(status); }
   // While set, the app has an unreadable profile and is waiting for the player to choose.
-  void set_recovery_prompt(bool prompt) { recovery_prompt_ = prompt; }
-  void open_legacy_panel() { legacy_panel_open_ = true; }
+  void set_recovery_prompt(bool prompt) { scenes_.set_recovery(prompt); }
+  void open_legacy_panel() { scenes_.open_legacy(); }
+  [[nodiscard]] bool modal_open() const { return scenes_.modal(); }
+  void set_run_id(std::string run_id) { run_id_ = std::move(run_id); }
+  void close_panels() { scenes_.close(); }
   void set_zoom(float zoom) { camera_.set_zoom(zoom); }
   void focus(sim::GridPos cell) { camera_.focus(cell); }
   [[nodiscard]] Rectangle debug_viewport() const { return camera_.viewport(); }
   [[nodiscard]] Vector2 debug_target() const { return camera_.camera().target; }
   [[nodiscard]] Vector2 debug_offset() const { return camera_.camera().offset; }
   [[nodiscard]] float debug_zoom() const { return camera_.zoom(); }
-  [[nodiscard]] Vector2 debug_world_to_screen(Vector2 world) const { return GetWorldToScreen2D(world, camera_.camera()); }
+  [[nodiscard]] Vector2 debug_world_to_screen(Vector2 world) const { return camera_.world_to_screen(world); }
 
 private:
-  void draw_world(const game::GameView& view, double interpolation_alpha);
+  void draw_world(const game::GameView& view);
   void refresh_terrain_texture(const game::GameView& view);
   [[nodiscard]] float heading_for(const sim::ActorSnapshot& actor, float dx, float dy);
-  void draw_ant(const sim::ActorSnapshot& actor, double interpolation_alpha, float zoom,
+  void draw_ant(const sim::ActorSnapshot& actor, const ActorPose& pose, float zoom,
                 bool selected);
   void draw_interface(const game::GameView& view, bool paused, int speed, bool simulation_limited);
+  void draw_pause_menu();
   void draw_recovery_prompt() const;
   void draw_legacy_panel(const game::GameView& view) const;
   [[nodiscard]] std::string truncate_to_width(const std::string& text, float max_width,
                                               float size) const;
-  void update_selection(const game::GameView& view);
+  void update_selection(const game::GameView& view, double interpolation_alpha);
   void draw_text(const char* text, int x, int y, int size = 20,
                  Color color = Color{37, 45, 40, 255}) const;
   void draw_button(Rectangle bounds, const char* label, bool active, const WidgetVisual& visual,
                    bool enabled = true) const;
   void draw_tooltip(const char* title, const char* body, float anchor_x, float anchor_y) const;
 
+  DesktopInput desktop_input_;
   CameraController camera_;
   UiState ui_;
   const char* tooltip_title_{};
@@ -83,8 +90,18 @@ private:
   double terrain_built_at_{};
   // Ants keep facing where they were last going, so a stopped ant does not snap to a default.
   std::unordered_map<sim::EntityId, float> heading_;
-  std::optional<sim::EntityId> selected_id_;
+  AntSelection selection_;
+  WorldClick world_click_;
+  std::vector<ActorPose> poses_;
+  std::string run_id_;
+  InterfaceLayout layout_;
+  bool select_requested_{};
+  Point select_point_{};
+  float panel_scroll_{};
+  SceneState scenes_;
+  Scene input_scene_{Scene::Colony};
   bool inspector_open_{true};
+  bool inspector_toggle_requested_{};
   bool toggle_pause_requested_{};
   std::optional<int> speed_requested_;
   std::optional<game::UpgradeId> upgrade_requested_;
@@ -92,8 +109,7 @@ private:
   bool save_requested_{};
   bool recover_requested_{};
   bool new_colony_requested_{};
-  bool recovery_prompt_{};
-  bool legacy_panel_open_{};
+
   bool flight_requested_{};
   bool new_run_requested_{};
   std::optional<game::TraitBranch> trait_requested_;
