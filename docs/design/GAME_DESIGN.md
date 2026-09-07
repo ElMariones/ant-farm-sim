@@ -16,7 +16,7 @@ There is no repeat-click income mechanic. The simulation earns everything. Betwe
 | Colony development | Minutes | Focus, investment, new workers, visible chamber expansion, first winged queen |
 | Generational growth | 30–45 minutes first run | Preview Legacy, choose flight timing, buy permanent traits, found a fresh colony |
 
-All times mean foreground play at 1x. Pausing or closing suspends progression. At 5x biological and economic clocks both advance five times as fast if the machine sustains the tick budget.
+All times mean foreground play at 1x. Pausing or closing suspends progression. At 5x and 20x biological and economic clocks advance five and twenty times as fast if the machine sustains the tick budget.
 
 ## First-session sequence
 
@@ -37,7 +37,7 @@ Onboarding tracks observed facts; loading a save never grants duplicate rewards 
 | Observe/inspect | Pan, zoom, select ant/chamber/source, follow selection | Cannot alter simulation state |
 | Change focus | Balanced, Growth, Expansion, or Foraging biases task response weights | Free; 10 sim-second cooldown; cannot disable essential jobs |
 | Invest Work | Purchase one level in one of four run adaptations | Validated cost; immediate modifier; levels reset at prestige |
-| Adjust time | Pause, 1x, 2x, 5x | No special rewards; always same fixed ticks |
+| Adjust time | Pause, 1x, 5x, 20x | No special rewards; always same fixed ticks |
 | Launch flight | End eligible run and credit shown Legacy | Confirmation pauses; commit must save before reset is accepted |
 | Spend Legacy | Buy next tier in either permanent branch between runs | Shared wallet; sequential prerequisites |
 | Start next colony | Create new seeded plot with owned modifiers | Costs nothing |

@@ -52,6 +52,7 @@ struct WorldStats {
   std::int64_t consumed_protein{};
   std::int64_t decayed_food{};
   std::uint64_t productive_worker_ticks{};
+  std::uint64_t gynes_born{};
 };
 
 struct ActorSnapshot {
@@ -77,6 +78,17 @@ struct BroodSnapshot {
   Tick target{};
   Tick care_remaining{};
   Tick starvation{};
+  BroodRole role{BroodRole::Worker};
+};
+
+// Permanent Legacy traits, fixed when the colony is founded. Effective parameters are computed
+// from base config, then these, then run adaptations; never by compounding an already-modified
+// value.
+struct TraitModifiers {
+  std::uint8_t vigor_tier{};
+  std::uint8_t industry_tier{};
+
+  friend constexpr bool operator==(TraitModifiers, TraitModifiers) = default;
 };
 
 struct CorpseSnapshot {
@@ -101,7 +113,7 @@ struct TaskDiagnostics {
 
 class World {
 public:
-  explicit World(std::uint64_t seed);
+  explicit World(std::uint64_t seed, TraitModifiers traits = {});
   explicit World(const WorldSnapshot& snapshot);
 
   void step();
@@ -127,6 +139,13 @@ public:
   [[nodiscard]] bool queen_alive() const { return queen_alive_; }
   [[nodiscard]] bool decline() const { return decline_; }
   [[nodiscard]] bool extinct() const { return extinct_; }
+  // Latched once living workers, run births and run age all pass their thresholds. Never revoked.
+  [[nodiscard]] bool mature() const { return mature_; }
+  [[nodiscard]] int living_workers() const;
+  [[nodiscard]] int live_winged_queens() const;
+  [[nodiscard]] int winged_brood() const;
+  [[nodiscard]] TraitModifiers traits() const { return traits_; }
+  [[nodiscard]] std::uint64_t egg_assignment_counter() const { return egg_assignment_counter_; }
   [[nodiscard]] Focus focus() const { return focus_; }
   void set_focus(Focus focus) { focus_ = focus; }
   void set_adaptation_levels(const std::array<std::uint8_t, 4>& levels) { adaptation_levels_ = levels; }
@@ -139,7 +158,14 @@ public:
   void debug_set_source_refill(std::size_t index, std::int64_t amount);
   void debug_set_store(Nutrient nutrient, std::int64_t amount);
   void debug_set_worker_lifespan(EntityId id, Tick lifespan);
-  void debug_spawn_brood(BroodStage stage, Tick progress = 0, Tick starvation = 0);
+  void debug_spawn_brood(BroodStage stage, Tick progress = 0, Tick starvation = 0,
+                         BroodRole role = BroodRole::Worker);
+  void debug_spawn_workers(int count);
+  void debug_kill_workers(int count);
+  void debug_set_workers_born(std::uint64_t births);
+  // Latches maturity without simulating the twelve minutes and 150 births that normally reach it,
+  // so caste-assignment behaviour can be tested independently of how maturity was reached.
+  void debug_set_mature();
   void debug_kill_queen();
 
 private:
@@ -169,7 +195,9 @@ private:
   void remove_dead_workers();
   void spawn_worker(GridPos position);
   [[nodiscard]] bool consume(Nutrient nutrient, std::int64_t amount);
-  [[nodiscard]] Tick brood_target(BroodStage stage) const;
+  [[nodiscard]] Tick brood_target(BroodStage stage, BroodRole role) const;
+  void spawn_winged_queen(GridPos position);
+  void update_maturity();
 
   std::uint64_t seed_{};
   Tick tick_{};
@@ -201,6 +229,12 @@ private:
   bool extinct_{};
   Focus focus_{Focus::Balanced};
   std::array<std::uint8_t, 4> adaptation_levels_{};
+  TraitModifiers traits_{};
+  // Food picked up but not yet delivered, per nutrient. Derived state: recomputed on load, never
+  // trusted from a snapshot.
+  std::array<std::int64_t, 2> carried_food_{};
+  bool mature_{};
+  std::uint64_t egg_assignment_counter_{};
   entt::registry registry_;
   std::vector<entt::entity> ordered_entities_;
 };

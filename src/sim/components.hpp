@@ -10,11 +10,13 @@
 
 namespace ant::sim {
 
-enum class AntKind : std::uint8_t { Queen, Worker };
+enum class AntKind : std::uint8_t { Queen, Worker, WingedQueen };
 enum class ForageState : std::uint8_t { AtHome, ToSource, Returning, WaitingForStorage };
 enum class Nutrient : std::uint8_t { Carbohydrate, Protein };
 enum class CargoKind : std::uint8_t { None, Food, Spoil, Corpse };
 enum class BroodStage : std::uint8_t { Egg, Larva, Pupa };
+// Which caste an egg was allocated to when it was laid. Fixed for the brood item's life.
+enum class BroodRole : std::uint8_t { Worker, Gyne };
 
 struct Identity {
   EntityId id{};

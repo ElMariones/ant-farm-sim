@@ -1,3 +1,5 @@
+#include "game/policy.hpp"
+#include "game/prestige.hpp"
 #include "game/session.hpp"
 #include "game/snapshot.hpp"
 #include "persistence/content_loader.hpp"
@@ -22,6 +24,10 @@ struct Options {
   bool save{};
   bool resume{};
   bool verify_round_trip{};
+  bool policy_buys{};
+  bool scenario{};
+  int vigor_tier{};
+  int industry_tier{};
 };
 
 Options parse_options(const int argc, char** argv) {
@@ -30,7 +36,9 @@ Options parse_options(const int argc, char** argv) {
     const std::string argument = argv[index];
     if (argument == "--help") {
       std::cout << "Usage: ant_headless [--seed N] [--ticks N] [--save-dir PATH] [--config PATH] "
-                   "[--save] [--resume] [--verify-round-trip]\n";
+                   "[--save] [--resume] [--verify-round-trip]\n"
+                   "                    [--scenario] [--policy none|buy-cheapest] "
+                   "[--vigor 0..4] [--industry 0..4]\n";
       std::exit(0);
     }
     if (argument == "--save") {
@@ -45,6 +53,10 @@ Options parse_options(const int argc, char** argv) {
       options.verify_round_trip = true;
       continue;
     }
+    if (argument == "--scenario") {
+      options.scenario = true;
+      continue;
+    }
     if (index + 1 >= argc) throw std::invalid_argument("incomplete argument: " + argument);
     const std::string value = argv[++index];
     if (argument == "--seed") {
@@ -55,6 +67,16 @@ Options parse_options(const int argc, char** argv) {
       options.save_directory = std::filesystem::path(value);
     } else if (argument == "--config") {
       options.config_path = std::filesystem::path(value);
+    } else if (argument == "--policy") {
+      if (value == "buy-cheapest") options.policy_buys = true;
+      else if (value != "none") throw std::invalid_argument("unknown policy: " + value);
+      options.scenario = true;
+    } else if (argument == "--vigor") {
+      options.vigor_tier = std::stoi(value);
+      if (options.vigor_tier < 0 || options.vigor_tier > 4) throw std::invalid_argument("--vigor is 0..4");
+    } else if (argument == "--industry") {
+      options.industry_tier = std::stoi(value);
+      if (options.industry_tier < 0 || options.industry_tier > 4) throw std::invalid_argument("--industry is 0..4");
     } else {
       throw std::invalid_argument("unknown argument: " + argument);
     }
@@ -98,6 +120,49 @@ void report(const std::uint64_t seed, const ant::game::Session& session) {
             << (session.assisted() ? "true" : "false") << "}\n";
 }
 
+double seconds(const ant::sim::Tick tick) {
+  return tick == 0 ? -1.0 : static_cast<double>(tick) / ant::sim::kTicksPerSecond;
+}
+
+void scenario_report(const Options& options, const ant::game::Session& session,
+                     const ant::game::ScenarioPolicy& policy) {
+  const ant::game::RunMilestones& m = policy.milestones();
+  const ant::sim::World& world = session.world();
+  std::cout << std::fixed << std::setprecision(1)
+            << "{\"seed\":" << options.seed
+            << ",\"policy\":\"" << (options.policy_buys ? "buy-cheapest" : "none") << "\""
+            << ",\"vigor\":" << options.vigor_tier
+            << ",\"industry\":" << options.industry_tier
+            << ",\"firstDeliverySec\":" << seconds(m.first_delivery)
+            << ",\"firstPurchaseSec\":" << seconds(m.first_purchase)
+            << ",\"firstBirthSec\":" << seconds(m.first_birth)
+            << ",\"maturitySec\":" << seconds(m.maturity)
+            << ",\"hundredCellsSec\":" << seconds(m.hundred_cells_excavated)
+            << ",\"flightReadySec\":" << seconds(m.flight_ready)
+            << ",\"flightPayout\":" << m.flight_payout
+            << ",\"purchases\":" << m.purchases
+            << ",\"peakWorkers\":" << m.peak_workers
+            << ",\"peakWingedQueens\":" << m.peak_winged_queens
+            << ",\"endWorkers\":" << world.living_workers()
+            << ",\"births\":" << world.stats().workers_born
+            << ",\"deaths\":" << world.stats().deaths
+            << ",\"excavated\":" << world.stats().cells_excavated
+            << ",\"work\":" << session.work()
+            << ",\"workPerMinute\":"
+            << (world.tick() == 0 ? 0.0
+                                  : static_cast<double>(session.work()) * 60.0 *
+                                        ant::sim::kTicksPerSecond / static_cast<double>(world.tick()))
+            << ",\"carbohydrate\":" << world.stores().carbohydrate
+            << ",\"protein\":" << world.stores().protein
+            << ",\"larvalStarvation\":" << (m.larval_starvation ? "true" : "false")
+            << ",\"storesEmpty\":" << (m.stores_empty ? "true" : "false")
+            << ",\"decline\":" << (m.decline ? "true" : "false")
+            << ",\"extinct\":" << (m.extinct ? "true" : "false")
+            << ",\"bottleneck\":\"" << policy.limiting_bottleneck() << "\""
+            << ",\"endSec\":" << seconds(world.tick())
+            << "}\n";
+}
+
 } // namespace
 
 int main(const int argc, char** argv) {
@@ -123,7 +188,22 @@ int main(const int argc, char** argv) {
       profile_id = loaded.profile->profile_id;
       run_id = loaded.profile->run->run_id;
     } else {
-      session.emplace(options.seed, content);
+      session.emplace(options.seed, content,
+                      ant::sim::TraitModifiers{static_cast<std::uint8_t>(options.vigor_tier),
+                                               static_cast<std::uint8_t>(options.industry_tier)});
+    }
+
+    if (options.scenario) {
+      ant::game::PolicyOptions policy_options;
+      policy_options.buy_upgrades = options.policy_buys;
+      ant::game::ScenarioPolicy policy(policy_options);
+      policy.run(*session, options.ticks);
+      if (!session->world().invariant_holds()) {
+        std::cerr << "simulation invariant failed\n";
+        return 2;
+      }
+      scenario_report(options, *session, policy);
+      return 0;
     }
 
     session->step_ticks(options.ticks);

@@ -4,12 +4,22 @@
 #include "sim/terrain_generation.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <array>
 #include <cmath>
 #include <queue>
 #include <stdexcept>
 
 namespace ant::sim {
+
+namespace {
+// A path and its cursor are one value: clearing them apart leaves next_cell past the end, which
+// is an invalid movement state a snapshot must never contain.
+void clear_path(Movement& movement) {
+  movement.path.clear();
+  movement.next_cell = 0;
+}
+} // namespace
 namespace {
 constexpr std::array<GridPos, 4> kNeighbors{{{0, -1}, {1, 0}, {0, 1}, {-1, 0}}};
 std::int32_t cell_center(const int value) { return value * kSubcellsPerCell + kSubcellsPerCell / 2; }
@@ -22,7 +32,7 @@ void hash_signed(std::uint64_t& hash, const std::int64_t value) {
 }
 } // namespace
 
-World::World(const std::uint64_t seed)
+World::World(const std::uint64_t seed, const TraitModifiers traits)
     : seed_(seed), grid_(Material::Soil),
       behavior_rng_(mix_seed(seed ^ 0xB3A4107ULL), mix_seed(seed ^ 0x515EEDULL)),
       lifecycle_rng_(mix_seed(seed ^ 0x11FEC1EULL), mix_seed(seed ^ 0xA63ULL)),
@@ -31,6 +41,7 @@ World::World(const std::uint64_t seed)
   grid_ = std::move(generated.grid); home_ = generated.home;
   sources_[0] = {next_id_++, generated.source_positions[0], Nutrient::Carbohydrate, 100'000, 100'000, 0, 800, 20, 20};
   sources_[1] = {next_id_++, generated.source_positions[1], Nutrient::Protein, 100'000, 100'000, 0, 400, 20, 20};
+  traits_ = traits;
   refresh_home_field(); spawn_queen(); spawn_workers(); recompute_needs_and_frontiers();
   starting_nest_air_ = connected_nest_air_;
 }
@@ -48,7 +59,8 @@ World::World(const WorldSnapshot& snapshot)
       spoil_mound_(snapshot.spoil_mound), next_laying_(snapshot.next_laying),
       queen_starvation_(snapshot.queen_starvation), queen_alive_(snapshot.queen_alive),
       decline_(snapshot.decline), extinct_(snapshot.extinct), focus_(snapshot.focus),
-      adaptation_levels_(snapshot.adaptation_levels) {
+      adaptation_levels_(snapshot.adaptation_levels), traits_(snapshot.traits),
+      mature_(snapshot.mature), egg_assignment_counter_(snapshot.egg_assignment_counter) {
   if (snapshot.terrain.size() != static_cast<std::size_t>(Grid::kWidth * Grid::kHeight) ||
       dig_work_.size() != snapshot.terrain.size()) throw std::invalid_argument("snapshot grid size mismatch");
   for (int y = 0; y < Grid::kHeight; ++y) for (int x = 0; x < Grid::kWidth; ++x) {
@@ -64,15 +76,26 @@ World::World(const WorldSnapshot& snapshot)
     registry_.emplace<Cargo>(entity, actor.cargo);
     if (actor.worker) {
       Movement movement = actor.movement;
-      movement.path_revision = grid_.navigation_revision();
+      // Restore staleness, not the counter: a path that needed replanning before the save must
+      // still need it after.
+      // Navigation revisions start at 1 and only increase, so 0 marks a path that was already
+      // stale and can never be mistaken for a current one later.
+      movement.path_revision = actor.path_valid ? grid_.navigation_revision() : 0;
       registry_.emplace<Movement>(entity, std::move(movement));
       registry_.emplace<Forager>(entity, actor.forager);
       registry_.emplace<WorkerMind>(entity, actor.mind);
       registry_.emplace<Life>(entity, actor.life);
+    } else if (actor.ant.kind == AntKind::WingedQueen) {
+      registry_.emplace<Life>(entity, actor.life);
     }
     ordered_entities_.push_back(entity);
   }
-  frontier_revision_ = grid_.navigation_revision();
+  frontier_revision_ = snapshot.frontiers_valid ? grid_.navigation_revision() : 0;
+  for (const ActorState& actor : snapshot.actors) {
+    if (actor.cargo.kind == CargoKind::Food && actor.cargo.amount > 0) {
+      carried_food_[static_cast<std::size_t>(actor.cargo.nutrient)] += actor.cargo.amount;
+    }
+  }
   if (!invariant_holds()) throw std::invalid_argument("snapshot violates world invariants");
 }
 
@@ -92,9 +115,19 @@ void World::spawn_worker(const GridPos p) {
   ordered_entities_.push_back(e);
 }
 
+void World::spawn_winged_queen(const GridPos p) {
+  const entt::entity e = registry_.create(); registry_.emplace<Identity>(e, next_id_++); registry_.emplace<Ant>(e, AntKind::WingedQueen);
+  registry_.emplace<Position>(e, cell_center(p.x), cell_center(p.y), cell_center(p.x), cell_center(p.y));
+  registry_.emplace<Cargo>(e);
+  // Winged queens do not forage, dig or nurse, and do not die of age in v0.1.
+  registry_.emplace<Life>(e, Life{0, std::numeric_limits<Tick>::max(), 0});
+  ordered_entities_.push_back(e);
+}
+
 void World::spawn_workers() {
   constexpr std::array<GridPos, 6> offsets{{{-3, 0}, {-2, -2}, {0, -3}, {2, -2}, {3, 0}, {0, 3}}};
-  for (std::size_t i = 0; i < offsets.size(); ++i) { spawn_worker({home_.x + offsets[i].x, home_.y + offsets[i].y}); registry_.get<Life>(ordered_entities_.back()).age = static_cast<Tick>(i) * 24U * kTicksPerSecond; }
+  const std::size_t count = offsets.size() + (traits_.vigor_tier >= 2 ? 2U : 0U);
+  for (std::size_t i = 0; i < count; ++i) { const GridPos offset = offsets[i % offsets.size()]; spawn_worker({home_.x + offset.x, home_.y + offset.y}); registry_.get<Life>(ordered_entities_.back()).age = static_cast<Tick>(i) * 24U * kTicksPerSecond; }
 }
 
 void World::refill_sources() {
@@ -193,9 +226,9 @@ void World::process_worker(const entt::entity e, int& path_budget) {
 
 void World::process_forager(const entt::entity e, int& path_budget) {
   Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); Cargo& cargo = registry_.get<Cargo>(e);
-  if (f.state == ForageState::ToSource && f.reserved_amount > 0 && tick_ >= f.reservation_expiry) { release_reservation(f); m.path.clear(); f.state = ForageState::AtHome; f.retry_after = tick_ + 200; }
+  if (f.state == ForageState::ToSource && f.reserved_amount > 0 && tick_ >= f.reservation_expiry) { release_reservation(f); clear_path(m); f.state = ForageState::AtHome; f.retry_after = tick_ + 200; }
   if (f.state == ForageState::WaitingForStorage) {
-    const std::int64_t delivered = std::min(capacity_for(cargo.nutrient) - store_for(cargo.nutrient), cargo.amount); store_for(cargo.nutrient) += delivered; cargo.amount -= delivered; stats_.delivered += delivered;
+    const std::int64_t delivered = std::min(capacity_for(cargo.nutrient) - store_for(cargo.nutrient), cargo.amount); store_for(cargo.nutrient) += delivered; cargo.amount -= delivered; carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= delivered; stats_.delivered += delivered;
     if (cargo.amount == 0) { cargo.kind = CargoKind::None; f.state = ForageState::AtHome; ++stats_.completed_round_trips; } return;
   }
   if (f.state == ForageState::AtHome) {
@@ -208,14 +241,32 @@ void World::process_forager(const entt::entity e, int& path_budget) {
 
 void World::choose_source(const entt::entity e, int& path_budget) {
   if (path_budget <= 0) return; const EntityId id = registry_.get<Identity>(e).id; Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); const GridPos start = registry_.get<Position>(e).cell();
+  // Follow the nutrient the colony is actually short of, measured against the same 50%-of-capacity
+  // target the foraging stimulus uses and counting food already on its way home. Trails only break
+  // a tie, so a well-worn route to a full larder cannot starve the other nutrient.
+  const auto shortfall = [this](const Nutrient nutrient) {
+    const std::int64_t target = capacity_for(nutrient) / 2;
+    if (target <= 0) return std::int64_t{0};
+    const std::int64_t have =
+        store_for(nutrient) + carried_food_[static_cast<std::size_t>(nutrient)];
+    return have >= target ? std::int64_t{0} : (target - have) * 1'000 / target;
+  };
+  const std::int64_t first_need = shortfall(sources_[0].nutrient);
+  const std::int64_t second_need = shortfall(sources_[1].nutrient);
   const std::uint16_t first_trail = trails_.at(sources_[0].position);
   const std::uint16_t second_trail = trails_.at(sources_[1].position);
-  const int preferred = first_trail == second_trail ? static_cast<int>(id % 2ULL)
-                                                    : (first_trail > second_trail ? 0 : 1);
+  const int preferred =
+      first_need != second_need
+          ? (first_need > second_need ? 0 : 1)
+          : (first_trail == second_trail ? static_cast<int>(id % 2ULL)
+                                         : (first_trail > second_trail ? 0 : 1));
   for (int attempt = 0; attempt < 2 && path_budget > 0; ++attempt) {
     const int source_index = (preferred + attempt) % 2; FoodSource& source = sources_[static_cast<std::size_t>(source_index)];
-    const std::int64_t carry_capacity = 2'000 * (100 + 20 * adaptation_levels_[2]) / 100;
-    const std::int64_t reservation = std::min<std::int64_t>({carry_capacity, source.amount - source.reserved, capacity_for(source.nutrient) - store_for(source.nutrient)}); if (reservation <= 0) continue;
+    const std::int64_t carry_capacity =
+        2'000 * (100 + 20 * adaptation_levels_[2]) / 100 * (traits_.industry_tier >= 3 ? 120 : 100) / 100;
+    const std::int64_t room = capacity_for(source.nutrient) - store_for(source.nutrient) -
+                              carried_food_[static_cast<std::size_t>(source.nutrient)] - source.reserved;
+    const std::int64_t reservation = std::min<std::int64_t>({carry_capacity, source.amount - source.reserved, room}); if (reservation <= 0) continue;
     source.reserved += reservation; f.source_index = source_index; f.reserved_amount = reservation; f.reservation_expiry = tick_ + 1'200; ++stats_.path_requests; --path_budget;
     const PathResult path = find_path(grid_, start, source.position); stats_.path_expansions += path.expanded;
     if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); f.state = ForageState::ToSource; return; }
@@ -224,7 +275,7 @@ void World::choose_source(const entt::entity e, int& path_budget) {
 }
 
 void World::refresh_path(const entt::entity e, int& path_budget) {
-  Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); const GridPos start = registry_.get<Position>(e).cell(); m.path.clear(); m.next_cell = 0;
+  Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); const GridPos start = registry_.get<Position>(e).cell(); clear_path(m);
   if (f.state == ForageState::Returning) { m.path = home_field_.path_home(grid_, start); m.path_revision = grid_.navigation_revision(); return; }
   if (f.state != ForageState::ToSource || f.source_index < 0 || path_budget <= 0) return; FoodSource& source = sources_[static_cast<std::size_t>(f.source_index)]; ++stats_.path_requests; --path_budget;
   const PathResult path = find_path(grid_, start, source.position); stats_.path_expansions += path.expanded;
@@ -236,7 +287,7 @@ bool World::move_one_tick(const entt::entity e) {
   Movement& m = registry_.get<Movement>(e); Position& p = registry_.get<Position>(e); if (m.next_cell >= m.path.size()) return true; const GridPos next = m.path[m.next_cell]; if (!grid_.passable(next)) return false;
   const std::int32_t before_x = p.x_subcells;
   const std::int32_t before_y = p.y_subcells;
-  m.speed_residual += 6 * kSubcellsPerCell; const int travel = m.speed_residual / kTicksPerSecond; m.speed_residual %= kTicksPerSecond;
+  m.speed_residual += 6 * kSubcellsPerCell * (traits_.industry_tier >= 2 ? 110 : 100) / 100; const int travel = m.speed_residual / kTicksPerSecond; m.speed_residual %= kTicksPerSecond;
   const std::int32_t tx = cell_center(next.x), ty = cell_center(next.y), dx = tx - p.x_subcells, dy = ty - p.y_subcells; const int distance = std::abs(dx) + std::abs(dy);
   if (distance <= travel) { p.x_subcells = tx; p.y_subcells = ty; ++m.next_cell; } else if (dx != 0) p.x_subcells += dx > 0 ? travel : -travel; else p.y_subcells += dy > 0 ? travel : -travel;
   if (p.x_subcells != before_x || p.y_subcells != before_y) ++stats_.productive_worker_ticks;
@@ -247,12 +298,12 @@ void World::arrive(const entt::entity e, int&) {
   Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); Cargo& cargo = registry_.get<Cargo>(e);
   if (f.state == ForageState::ToSource) {
     FoodSource& source = sources_[static_cast<std::size_t>(f.source_index)]; const std::int64_t picked = std::min(source.amount, f.reserved_amount); source.amount -= picked; source.reserved -= f.reserved_amount; f.reserved_amount = 0;
-    if (picked <= 0) { f.source_index = -1; f.state = ForageState::AtHome; f.retry_after = tick_ + 100; m.path.clear(); return; }
-    cargo.kind = CargoKind::Food; cargo.nutrient = source.nutrient; cargo.amount = picked; stats_.picked_up += picked; f.state = ForageState::Returning;
+    if (picked <= 0) { f.source_index = -1; f.state = ForageState::AtHome; f.retry_after = tick_ + 100; clear_path(m); return; }
+    cargo.kind = CargoKind::Food; cargo.nutrient = source.nutrient; cargo.amount = picked; carried_food_[static_cast<std::size_t>(source.nutrient)] += picked; stats_.picked_up += picked; f.state = ForageState::Returning;
     m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell()); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); return;
   }
   if (f.state == ForageState::Returning) {
-    const std::int64_t delivered = std::min(capacity_for(cargo.nutrient) - store_for(cargo.nutrient), cargo.amount); store_for(cargo.nutrient) += delivered; cargo.amount -= delivered; stats_.delivered += delivered; m.path.clear(); m.next_cell = 0;
+    const std::int64_t delivered = std::min(capacity_for(cargo.nutrient) - store_for(cargo.nutrient), cargo.amount); store_for(cargo.nutrient) += delivered; cargo.amount -= delivered; carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= delivered; stats_.delivered += delivered; clear_path(m);
     if (cargo.amount > 0) f.state = ForageState::WaitingForStorage; else { cargo.kind = CargoKind::None; f.state = ForageState::AtHome; f.source_index = -1; ++stats_.completed_round_trips; }
   }
 }
@@ -271,7 +322,8 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
   if (!mind.has_target) return; const GridPos current = registry_.get<Position>(e).cell(); GridPos work = current; bool adjacent = false;
   for (const GridPos d : kNeighbors) { const GridPos candidate{mind.target.x + d.x, mind.target.y + d.y}; if (grid_.passable(candidate)) { work = candidate; adjacent = candidate == current; if (adjacent) break; } }
   if (!adjacent) { route_to(e, work, path_budget); return; } if (++mind.action_ticks < 10) return; mind.action_ticks = 0; std::uint16_t& remaining = dig_work_[grid_index(mind.target)]; if (remaining == 0) remaining = grid_.at(mind.target) == Material::Clay ? 2'500 : 1'000;
-  const std::uint16_t dig_amount = static_cast<std::uint16_t>(100 + 25 * adaptation_levels_[0]);
+  const std::uint16_t dig_amount = static_cast<std::uint16_t>(
+      (100 + 25 * adaptation_levels_[0]) * (traits_.industry_tier >= 1 ? 115 : 100) / 100);
   ++stats_.productive_worker_ticks;
   if (remaining <= dig_amount) { remaining = 0; grid_.set(mind.target, Material::Air); Cargo& cargo = registry_.get<Cargo>(e); cargo.kind = CargoKind::Spoil; cargo.amount = 1'000; ++stats_.cells_excavated; mind.has_target = false; }
   else remaining = static_cast<std::uint16_t>(remaining - dig_amount);
@@ -296,6 +348,7 @@ void World::process_cleaner(const entt::entity e, int& path_budget) {
     cargo.kind = CargoKind::Food;
     cargo.nutrient = dropped->nutrient;
     cargo.amount = dropped->amount;
+    carried_food_[static_cast<std::size_t>(cargo.nutrient)] += cargo.amount;
     dropped_food_.erase(dropped);
     return;
   }
@@ -309,26 +362,53 @@ void World::process_cleaner(const entt::entity e, int& path_budget) {
 void World::deliver_non_food(const entt::entity e) {
   Cargo& cargo = registry_.get<Cargo>(e); Movement& m = registry_.get<Movement>(e); const GridPos outlet{home_.x, 31};
   if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), outlet); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
-  if (cargo.kind == CargoKind::Spoil) { ++spoil_mound_; ++stats_.spoil_delivered; } else if (cargo.kind == CargoKind::Corpse) ++stats_.corpses_cleaned; cargo = Cargo{}; m.path.clear();
+  if (cargo.kind == CargoKind::Spoil) { ++spoil_mound_; ++stats_.spoil_delivered; } else if (cargo.kind == CargoKind::Corpse) ++stats_.corpses_cleaned; cargo = Cargo{}; clear_path(m);
 }
 
 bool World::consume(const Nutrient nutrient, const std::int64_t amount) { std::int64_t& store = store_for(nutrient); if (store < amount) return false; store -= amount; if (nutrient == Nutrient::Carbohydrate) stats_.consumed_carbohydrate += amount; else stats_.consumed_protein += amount; return true; }
-Tick World::brood_target(const BroodStage stage) const { if (stage == BroodStage::Egg) return 30 * kTicksPerSecond; if (stage == BroodStage::Larva) return 60 * kTicksPerSecond; return 45 * kTicksPerSecond; }
+Tick World::brood_target(const BroodStage stage, const BroodRole role) const {
+  Tick base = stage == BroodStage::Egg ? 30 * kTicksPerSecond
+            : stage == BroodStage::Larva ? 60 * kTicksPerSecond : 45 * kTicksPerSecond;
+  if (stage == BroodStage::Egg && traits_.vigor_tier >= 1) base = base * 90 / 100;
+  if (stage != BroodStage::Egg && traits_.vigor_tier >= 3) base = base * 85 / 100;
+  return role == BroodRole::Gyne ? base * 2 : base;
+}
 
 void World::update_biology() {
   bool queen_fed = false;
-  if (queen_alive_) { queen_fed = stores_.carbohydrate >= 20 && stores_.protein >= 10; if (queen_fed) { static_cast<void>(consume(Nutrient::Carbohydrate, 20)); static_cast<void>(consume(Nutrient::Protein, 10)); queen_starvation_ = 0; } else queen_starvation_ += kTicksPerSecond; if (queen_starvation_ >= 300 * kTicksPerSecond) { queen_alive_ = false; decline_ = true; const entt::entity queen = ordered_entities_.front(); corpses_.push_back({registry_.get<Identity>(queen).id, home_, 0, false}); registry_.destroy(queen); ordered_entities_.erase(ordered_entities_.begin()); ++stats_.deaths; } }
-  for (const entt::entity e : ordered_entities_) if (registry_.all_of<Life>(e)) { Life& life = registry_.get<Life>(e); life.age += kTicksPerSecond; if (consume(Nutrient::Carbohydrate, 3)) life.starvation = 0; else life.starvation += kTicksPerSecond; }
+  const std::int64_t queen_carbs = traits_.vigor_tier >= 4 ? 10 : 20;
+  const std::int64_t queen_protein = traits_.vigor_tier >= 4 ? 5 : 10;
+  if (queen_alive_) { queen_fed = stores_.carbohydrate >= queen_carbs && stores_.protein >= queen_protein; if (queen_fed) { static_cast<void>(consume(Nutrient::Carbohydrate, queen_carbs)); static_cast<void>(consume(Nutrient::Protein, queen_protein)); queen_starvation_ = 0; } else queen_starvation_ += kTicksPerSecond; if (queen_starvation_ >= 300 * kTicksPerSecond) { queen_alive_ = false; decline_ = true; const entt::entity queen = ordered_entities_.front(); corpses_.push_back({registry_.get<Identity>(queen).id, home_, 0, false}); registry_.destroy(queen); ordered_entities_.erase(ordered_entities_.begin()); ++stats_.deaths; } }
+  for (const entt::entity e : ordered_entities_) if (registry_.all_of<Life>(e)) {
+    Life& life = registry_.get<Life>(e); life.age += kTicksPerSecond;
+    const bool winged = registry_.get<Ant>(e).kind == AntKind::WingedQueen;
+    // A ration is all-or-nothing: a partial meal never resets the starvation timer.
+    const bool fed = winged ? (stores_.carbohydrate >= 3 && stores_.protein >= 2 &&
+                               consume(Nutrient::Carbohydrate, 3) && consume(Nutrient::Protein, 2))
+                            : consume(Nutrient::Carbohydrate, 3);
+    if (fed) life.starvation = 0; else life.starvation += kTicksPerSecond;
+  }
   std::vector<EntityId> matured;
-  for (BroodSnapshot& item : brood_) { item.target = brood_target(item.stage); bool fed = true; if (item.stage == BroodStage::Larva) { fed = stores_.carbohydrate >= 8 && stores_.protein >= 15; if (fed) { static_cast<void>(consume(Nutrient::Carbohydrate, 8)); static_cast<void>(consume(Nutrient::Protein, 15)); item.starvation = 0; } else item.starvation += kTicksPerSecond; }
+  std::vector<BroodRole> matured_roles;
+  for (BroodSnapshot& item : brood_) { item.target = brood_target(item.stage, item.role); bool fed = true; if (item.stage == BroodStage::Larva) { const std::int64_t carbs = item.role == BroodRole::Gyne ? 16 : 8; const std::int64_t protein = item.role == BroodRole::Gyne ? 30 : 15; fed = stores_.carbohydrate >= carbs && stores_.protein >= protein; if (fed) { static_cast<void>(consume(Nutrient::Carbohydrate, carbs)); static_cast<void>(consume(Nutrient::Protein, protein)); item.starvation = 0; } else item.starvation += kTicksPerSecond; }
     const bool cared = item.care_remaining > 0;
     if (item.care_remaining > 0) item.care_remaining -= std::min<Tick>(item.care_remaining, kTicksPerSecond);
     if (fed) { const Tick base = cared ? kTicksPerSecond : kTicksPerSecond / 2; item.progress += base * static_cast<Tick>(100 + 10 * adaptation_levels_[1]) / 100; }
-    if (item.stage != BroodStage::Larva || item.starvation < 180 * kTicksPerSecond) if (item.progress >= item.target) { item.progress = 0; if (item.stage == BroodStage::Egg) item.stage = BroodStage::Larva; else if (item.stage == BroodStage::Larva) item.stage = BroodStage::Pupa; else matured.push_back(item.id); }
+    if (item.stage != BroodStage::Larva || item.starvation < 180 * kTicksPerSecond) if (item.progress >= item.target) { item.progress = 0; if (item.stage == BroodStage::Egg) item.stage = BroodStage::Larva; else if (item.stage == BroodStage::Larva) item.stage = BroodStage::Pupa; else { matured.push_back(item.id); matured_roles.push_back(item.role); } }
   }
   brood_.erase(std::remove_if(brood_.begin(), brood_.end(), [this, &matured](const BroodSnapshot& item) { const bool starved = item.stage == BroodStage::Larva && item.starvation >= 180 * kTicksPerSecond; if (starved) ++stats_.deaths; return starved || std::find(matured.begin(), matured.end(), item.id) != matured.end(); }), brood_.end());
-  for (const EntityId id : matured) { static_cast<void>(id); spawn_worker(home_); ++stats_.workers_born; }
-  if (queen_alive_ && queen_fed && tick_ + 1 >= next_laying_) { const Tick interval = static_cast<Tick>(12 * kTicksPerSecond * 100 / (100 + 15 * adaptation_levels_[3])); next_laying_ = tick_ + 1 + std::max<Tick>(1, interval); if (brood_.size() < static_cast<std::size_t>(nursery_capacity_)) { brood_.push_back({next_id_++, BroodStage::Egg, {home_.x + static_cast<int>(stats_.eggs_laid % 7) - 3, home_.y + static_cast<int>((stats_.eggs_laid / 7) % 3) - 1}, 0, brood_target(BroodStage::Egg), 0, 0}); ++stats_.eggs_laid; } }
+  for (std::size_t index = 0; index < matured.size(); ++index) {
+    if (matured_roles[index] == BroodRole::Gyne) { spawn_winged_queen(home_); ++stats_.gynes_born; }
+    else { spawn_worker(home_); ++stats_.workers_born; }
+  }
+  if (queen_alive_ && queen_fed && tick_ + 1 >= next_laying_) { const Tick interval = static_cast<Tick>(12 * kTicksPerSecond * 100 / (100 + 15 * adaptation_levels_[3])); next_laying_ = tick_ + 1 + std::max<Tick>(1, interval); if (brood_.size() < static_cast<std::size_t>(nursery_capacity_)) {
+    BroodRole role = BroodRole::Worker;
+    if (mature_) {
+      ++egg_assignment_counter_;
+      // One in five, and only while live winged queens plus winged brood stay under ten.
+      if (egg_assignment_counter_ % 5 == 0 && live_winged_queens() + winged_brood() < 10) role = BroodRole::Gyne;
+    }
+    brood_.push_back({next_id_++, BroodStage::Egg, {home_.x + static_cast<int>(stats_.eggs_laid % 7) - 3, home_.y + static_cast<int>((stats_.eggs_laid / 7) % 3) - 1}, 0, brood_target(BroodStage::Egg, role), 0, 0, role}); ++stats_.eggs_laid; } }
   remove_dead_workers(); for (CorpseSnapshot& corpse : corpses_) { corpse.age += kTicksPerSecond; corpse.cleanable = corpse.age >= 30 * kTicksPerSecond; }
   corpses_.erase(std::remove_if(corpses_.begin(), corpses_.end(), [](const CorpseSnapshot& c) { return c.age >= 300 * kTicksPerSecond; }), corpses_.end());
   for (DroppedCargoSnapshot& dropped : dropped_food_) dropped.age += kTicksPerSecond;
@@ -338,13 +418,35 @@ void World::update_biology() {
         stats_.decayed_food += dropped.amount;
         return true;
       }), dropped_food_.end());
-  const bool has_workers = std::any_of(ordered_entities_.begin(), ordered_entities_.end(), [this](const entt::entity e) { return registry_.all_of<Life>(e); });
-  extinct_ = !queen_alive_ && !has_workers && brood_.empty();
+  update_maturity();
+  const bool has_survivors = std::any_of(ordered_entities_.begin(), ordered_entities_.end(), [this](const entt::entity e) { return registry_.all_of<Life>(e); });
+  extinct_ = !queen_alive_ && !has_survivors && brood_.empty();
+}
+
+void World::update_maturity() {
+  if (mature_) return; // Latched: a later population dip never revokes it.
+  mature_ = living_workers() >= 100 && stats_.workers_born >= 150 &&
+            tick_ >= 720 * static_cast<Tick>(kTicksPerSecond);
+}
+
+int World::living_workers() const {
+  return static_cast<int>(std::count_if(ordered_entities_.begin(), ordered_entities_.end(),
+      [this](const entt::entity e) { return registry_.all_of<WorkerMind>(e); }));
+}
+
+int World::live_winged_queens() const {
+  return static_cast<int>(std::count_if(ordered_entities_.begin(), ordered_entities_.end(),
+      [this](const entt::entity e) { return registry_.get<Ant>(e).kind == AntKind::WingedQueen; }));
+}
+
+int World::winged_brood() const {
+  return static_cast<int>(std::count_if(brood_.begin(), brood_.end(),
+      [](const BroodSnapshot& item) { return item.role == BroodRole::Gyne; }));
 }
 
 void World::remove_dead_workers() {
   std::vector<entt::entity> dead;
-  for (const entt::entity e : ordered_entities_) if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); if (life.age < life.lifespan && life.starvation < 120 * kTicksPerSecond) continue; const Cargo cargo = registry_.get<Cargo>(e); const GridPos p = registry_.get<Position>(e).cell(); if (cargo.kind == CargoKind::Corpse) corpses_.push_back({cargo.entity_id, p, 30 * kTicksPerSecond, true}); else if (cargo.kind == CargoKind::Food && cargo.amount > 0) dropped_food_.push_back({next_id_++, p, cargo.nutrient, cargo.amount, 0}); corpses_.push_back({registry_.get<Identity>(e).id, p, 0, false}); release_reservation(registry_.get<Forager>(e)); dead.push_back(e); ++stats_.deaths; }
+  for (const entt::entity e : ordered_entities_) if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); if (life.age < life.lifespan && life.starvation < 120 * kTicksPerSecond) continue; const Cargo cargo = registry_.get<Cargo>(e); const GridPos p = registry_.get<Position>(e).cell(); if (cargo.kind == CargoKind::Corpse) corpses_.push_back({cargo.entity_id, p, 30 * kTicksPerSecond, true}); else if (cargo.kind == CargoKind::Food && cargo.amount > 0) { dropped_food_.push_back({next_id_++, p, cargo.nutrient, cargo.amount, 0}); carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= cargo.amount; } corpses_.push_back({registry_.get<Identity>(e).id, p, 0, false}); if (registry_.all_of<Forager>(e)) release_reservation(registry_.get<Forager>(e)); dead.push_back(e); ++stats_.deaths; }
   for (const entt::entity e : dead) registry_.destroy(e); ordered_entities_.erase(std::remove_if(ordered_entities_.begin(), ordered_entities_.end(), [&dead](const entt::entity e) { return std::find(dead.begin(), dead.end(), e) != dead.end(); }), ordered_entities_.end());
 }
 
@@ -375,13 +477,16 @@ WorldSnapshot World::snapshot() const {
   out.next_laying = next_laying_; out.queen_starvation = queen_starvation_;
   out.queen_alive = queen_alive_; out.decline = decline_; out.extinct = extinct_;
   out.focus = focus_; out.adaptation_levels = adaptation_levels_;
+  out.traits = traits_; out.mature = mature_; out.egg_assignment_counter = egg_assignment_counter_;
+  out.frontiers_valid = frontier_revision_ == grid_.navigation_revision();
   out.actors.reserve(ordered_entities_.size());
   for (const entt::entity entity : ordered_entities_) {
     ActorState actor;
     actor.identity = registry_.get<Identity>(entity); actor.position = registry_.get<Position>(entity);
     actor.ant = registry_.get<Ant>(entity); actor.cargo = registry_.get<Cargo>(entity);
     actor.worker = registry_.all_of<WorkerMind>(entity);
-    if (actor.worker) { actor.movement = registry_.get<Movement>(entity); actor.forager = registry_.get<Forager>(entity); actor.mind = registry_.get<WorkerMind>(entity); actor.life = registry_.get<Life>(entity); }
+    if (actor.worker) { actor.movement = registry_.get<Movement>(entity); actor.path_valid = actor.movement.path_revision == grid_.navigation_revision(); actor.forager = registry_.get<Forager>(entity); actor.mind = registry_.get<WorkerMind>(entity); actor.life = registry_.get<Life>(entity); }
+    else if (actor.ant.kind == AntKind::WingedQueen) actor.life = registry_.get<Life>(entity);
     out.actors.push_back(std::move(actor));
   }
   return out;
@@ -391,8 +496,8 @@ std::uint64_t World::canonical_hash() const {
   std::uint64_t hash = 1469598103934665603ULL; hash_value(hash, seed_); hash_value(hash, tick_); hash_value(hash, grid_.material_hash()); hash_value(hash, behavior_rng_.state()); hash_value(hash, lifecycle_rng_.state()); hash_signed(hash, stores_.carbohydrate); hash_signed(hash, stores_.protein); hash_value(hash, trails_.mass()); hash_value(hash, queen_alive_); hash_value(hash, queen_starvation_); hash_value(hash, static_cast<std::uint64_t>(focus_));
   for (const FoodSource& source : sources_) { hash_signed(hash, source.amount); hash_signed(hash, source.reserved); hash_value(hash, source.next_refill); }
   for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); hash_value(hash, id.id); hash_value(hash, static_cast<std::uint64_t>(p.x_subcells)); hash_value(hash, static_cast<std::uint64_t>(p.y_subcells)); hash_signed(hash, cargo.amount); if (registry_.all_of<WorkerMind>(e)) { const WorkerMind& mind = registry_.get<WorkerMind>(e); hash_value(hash, static_cast<std::uint64_t>(mind.task)); hash_value(hash, mind.committed_until); } if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); hash_value(hash, life.age); hash_value(hash, life.lifespan); hash_value(hash, life.starvation); } }
-  for (const BroodSnapshot& b : brood_) { hash_value(hash, b.id); hash_value(hash, static_cast<std::uint64_t>(b.stage)); hash_value(hash, b.progress); hash_value(hash, b.starvation); } for (const CorpseSnapshot& c : corpses_) { hash_value(hash, c.id); hash_value(hash, c.age); } for (const DroppedCargoSnapshot& dropped : dropped_food_) { hash_value(hash, dropped.id); hash_signed(hash, dropped.amount); hash_value(hash, dropped.age); }
-  hash_signed(hash, stats_.delivered); hash_value(hash, stats_.cells_excavated); hash_value(hash, stats_.workers_born); hash_value(hash, stats_.deaths); hash_value(hash, stats_.productive_worker_ticks); for (const auto level : adaptation_levels_) hash_value(hash, level); return hash;
+  for (const BroodSnapshot& b : brood_) { hash_value(hash, b.id); hash_value(hash, static_cast<std::uint64_t>(b.stage)); hash_value(hash, static_cast<std::uint64_t>(b.role)); hash_value(hash, b.progress); hash_value(hash, b.starvation); } for (const CorpseSnapshot& c : corpses_) { hash_value(hash, c.id); hash_value(hash, c.age); } for (const DroppedCargoSnapshot& dropped : dropped_food_) { hash_value(hash, dropped.id); hash_signed(hash, dropped.amount); hash_value(hash, dropped.age); }
+  hash_signed(hash, stats_.delivered); hash_value(hash, stats_.cells_excavated); hash_value(hash, stats_.workers_born); hash_value(hash, stats_.deaths); hash_value(hash, stats_.productive_worker_ticks); hash_value(hash, stats_.gynes_born); for (const auto level : adaptation_levels_) hash_value(hash, level); hash_value(hash, traits_.vigor_tier); hash_value(hash, traits_.industry_tier); hash_value(hash, mature_); hash_value(hash, egg_assignment_counter_); return hash;
 }
 
 bool World::invariant_holds() const {
@@ -407,7 +512,26 @@ void World::debug_set_source_amount(const std::size_t i, const std::int64_t amou
 void World::debug_set_source_refill(const std::size_t i, const std::int64_t amount) { if (amount < 0) throw std::out_of_range("source refill cannot be negative"); sources_.at(i).refill_amount = amount; }
 void World::debug_set_store(const Nutrient n, const std::int64_t amount) { if (amount < 0 || amount > capacity_for(n)) throw std::out_of_range("store amount outside capacity"); store_for(n) = amount; }
 void World::debug_set_worker_lifespan(const EntityId id, const Tick lifespan) { for (const entt::entity e : ordered_entities_) if (registry_.get<Identity>(e).id == id && registry_.all_of<Life>(e)) registry_.get<Life>(e).lifespan = lifespan; }
-void World::debug_spawn_brood(const BroodStage stage, const Tick progress, const Tick starvation) { brood_.push_back({next_id_++, stage, home_, progress, brood_target(stage), 0, starvation}); }
+void World::debug_spawn_brood(const BroodStage stage, const Tick progress, const Tick starvation, const BroodRole role) { brood_.push_back({next_id_++, stage, home_, progress, brood_target(stage, role), 0, starvation, role}); }
+void World::debug_spawn_workers(const int count) { for (int i = 0; i < count; ++i) spawn_worker(home_); }
+void World::debug_set_workers_born(const std::uint64_t births) { stats_.workers_born = births; }
+void World::debug_set_mature() { mature_ = true; }
+void World::debug_kill_workers(const int count) {
+  int removed = 0;
+  std::vector<entt::entity> dead;
+  for (const entt::entity e : ordered_entities_) {
+    if (removed >= count || !registry_.all_of<WorkerMind>(e)) continue;
+    release_reservation(registry_.get<Forager>(e));
+    corpses_.push_back({registry_.get<Identity>(e).id, registry_.get<Position>(e).cell(), 0, false});
+    dead.push_back(e);
+    ++removed;
+    ++stats_.deaths;
+  }
+  for (const entt::entity e : dead) registry_.destroy(e);
+  ordered_entities_.erase(std::remove_if(ordered_entities_.begin(), ordered_entities_.end(),
+      [&dead](const entt::entity e) { return std::find(dead.begin(), dead.end(), e) != dead.end(); }),
+      ordered_entities_.end());
+}
 void World::debug_kill_queen() { if (queen_alive_) { queen_alive_ = false; decline_ = true; const entt::entity queen = ordered_entities_.front(); corpses_.push_back({registry_.get<Identity>(queen).id, home_, 0, false}); registry_.destroy(queen); ordered_entities_.erase(ordered_entities_.begin()); ++stats_.deaths; } }
 
 } // namespace ant::sim

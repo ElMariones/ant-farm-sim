@@ -184,16 +184,19 @@ TEST_CASE("adaptations change simulated rates rather than task eligibility",
           "[game][progression]") {
   ant::game::Session baseline(7);
   ant::game::Session upgraded(7);
-  upgraded.debug_grant_work(1'000);
-  REQUIRE(upgraded.buy_upgrade(UpgradeId::Excavation).accepted);
-  REQUIRE(upgraded.buy_upgrade(UpgradeId::Excavation).accepted);
-  REQUIRE(upgraded.buy_upgrade(UpgradeId::Excavation).accepted);
-  REQUIRE(upgraded.buy_upgrade(UpgradeId::Excavation).accepted);
+  upgraded.debug_grant_work(1'000'000);
+  for (int level = 0; level < 10; ++level) {
+    REQUIRE(upgraded.buy_upgrade(UpgradeId::Excavation).accepted);
+  }
 
-  baseline.step_ticks(6'000);
-  upgraded.step_ticks(6'000);
+  // Buying a dig-rate adaptation diverges the two colonies' random draws, so a few minutes of
+  // excavation is noise. Measure over a window long enough for the rate itself to dominate.
+  baseline.step_ticks(12'000);
+  upgraded.step_ticks(12'000);
 
   CHECK(upgraded.world().stats().cells_excavated > baseline.world().stats().cells_excavated);
+  // The adaptation changes how fast digging goes, not who is allowed to dig.
+  CHECK(baseline.world().stats().cells_excavated > 0);
   CHECK(baseline.world().invariant_holds());
   CHECK(upgraded.world().invariant_holds());
 }

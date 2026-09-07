@@ -1,5 +1,6 @@
 #include "app/save_coordinator.hpp"
 #include "app/window_size.hpp"
+#include "game/prestige.hpp"
 #include "game/session.hpp"
 #include "game/snapshot.hpp"
 #include "game/view.hpp"
@@ -35,6 +36,7 @@ struct Options {
   bool exit_after_screenshot{};
   bool display_metrics{};
   bool start_paused{};
+  bool open_legacy_panel{};
   std::optional<std::filesystem::path> save_directory;
   std::optional<std::filesystem::path> config_path;
 };
@@ -65,7 +67,7 @@ Options parse_options(const int argc, char** argv) {
       std::cout << "Usage: ant_farm [--seed N] [--width N] [--height N] [--fast-forward N] "
                    "[--zoom N] [--start-paused] [--screenshot PATH] "
                    "[--exit-after-screenshot] [--fps N] [--save-dir PATH] "
-                   "[--config PATH]\n";
+                   "[--config PATH] [--legacy-panel]\n";
       std::exit(0);
     }
     if (argument == "--exit-after-screenshot") {
@@ -78,6 +80,10 @@ Options parse_options(const int argc, char** argv) {
     }
     if (argument == "--start-paused") {
       options.start_paused = true;
+      continue;
+    }
+    if (argument == "--legacy-panel") {
+      options.open_legacy_panel = true;
       continue;
     }
     if (index + 1 >= argc) {
@@ -124,19 +130,48 @@ struct ProfileIdentity {
   std::string run_id;
   ant::game::MetaSnapshot meta;
   ant::game::SettingsSnapshot settings;
+  std::uint64_t revision{};
+  std::optional<ant::game::FlightReceipt> last_flight_receipt;
 };
 
+ant::game::LegacyView legacy_view(const ProfileIdentity& identity, const bool between_runs) {
+  ant::game::LegacyView legacy;
+  legacy.between_runs = between_runs;
+  legacy.wallet = identity.meta.legacy_wallet;
+  legacy.vigor_tier = identity.meta.vigor_tier;
+  legacy.industry_tier = identity.meta.industry_tier;
+  legacy.vigor_cost = ant::game::next_trait_cost(identity.meta, ant::game::TraitBranch::Vigor);
+  legacy.industry_cost =
+      ant::game::next_trait_cost(identity.meta, ant::game::TraitBranch::Industry);
+  legacy.generation = identity.meta.generation;
+  legacy.successful_flights = identity.meta.successful_flights;
+  return legacy;
+}
+
 ant::game::ProfileSnapshot build_candidate(const ProfileIdentity& identity,
-                                           const ant::game::Session& session, const int speed) {
+                                           const ant::game::Session& session, const int speed,
+                                           const bool between_runs) {
   ant::game::ProfileSnapshot candidate;
   candidate.content_version = session.progression().content_version;
   candidate.profile_id = identity.profile_id;
-  candidate.phase = ant::game::ProfilePhase::ActiveRun;
   candidate.meta = identity.meta;
   candidate.settings = identity.settings;
   candidate.settings.preferred_speed = speed;
-  candidate.run = session.snapshot(identity.run_id);
+  candidate.last_flight_receipt = identity.last_flight_receipt;
+  candidate.phase = between_runs ? ant::game::ProfilePhase::BetweenRuns
+                                 : ant::game::ProfilePhase::ActiveRun;
+  if (!between_runs) candidate.run = session.snapshot(identity.run_id);
   return candidate;
+}
+
+// Adopts a profile the save service has just committed as the new authoritative view.
+void adopt(ProfileIdentity& identity, const ant::game::ProfileSnapshot& profile) {
+  identity.profile_id = profile.profile_id;
+  identity.meta = profile.meta;
+  identity.settings = profile.settings;
+  identity.revision = profile.revision;
+  identity.last_flight_receipt = profile.last_flight_receipt;
+  if (profile.run) identity.run_id = profile.run->run_id;
 }
 
 } // namespace
@@ -161,19 +196,25 @@ int main(const int argc, char** argv) {
     ProfileIdentity identity;
     std::optional<ant::game::ProfileSnapshot> recovery_backup;
     bool recovery_prompt = false;
+    bool between_runs = false;
     int speed = 1;
 
     if (save_service) {
       const ant::persistence::LoadResult loaded = save_service->load();
       switch (loaded.state) {
       case ant::persistence::LoadState::Loaded:
+        adopt(identity, *loaded.profile);
+        speed = loaded.profile->settings.preferred_speed;
         if (loaded.profile->run) {
           session.emplace(ant::game::Session::restore(*loaded.profile->run));
-          identity = {loaded.profile->profile_id, loaded.profile->run->run_id, loaded.profile->meta,
-                      loaded.profile->settings};
-          speed = loaded.profile->settings.preferred_speed;
           saves.set_status("Colony resumed (revision " + std::to_string(loaded.profile->revision) +
                            ")");
+        } else {
+          // Saved between colonies: the shop is the resume point, and the world behind it is only
+          // a backdrop that is never stepped or written.
+          between_runs = true;
+          session.emplace(options.seed, content, ant::game::trait_modifiers(loaded.profile->meta));
+          saves.set_status("Choose permanent traits, then found the next colony");
         }
         break;
       case ant::persistence::LoadState::RecoveryAvailable:
@@ -218,7 +259,8 @@ int main(const int argc, char** argv) {
 
     ant::presentation::Renderer renderer;
     renderer.set_zoom(options.zoom);
-    bool paused = options.start_paused || recovery_prompt;
+    if (options.open_legacy_panel) renderer.open_legacy_panel();
+    bool paused = options.start_paused || recovery_prompt || between_runs;
     double accumulator = 0.0;
     bool simulation_limited = false;
     int rendered_frames = 0;
@@ -237,23 +279,47 @@ int main(const int argc, char** argv) {
       const auto commit = [&](const ant::app::SaveTrigger trigger) {
         if (!save_service || recovery_prompt) return;
         const ant::persistence::SaveResult result =
-            save_service->commit(build_candidate(identity, *session, speed));
+            save_service->commit(build_candidate(identity, *session, speed, between_runs));
         if (result.committed) {
+          adopt(identity, *result.profile);
           saves.record_success(trigger, result.profile->revision, result.durability_uncertain);
         } else {
           saves.record_failure(trigger, result.error);
         }
       };
 
+      // One durable progression action at a time: each builds a candidate from the committed
+      // profile, and the live session only changes once the commit is known to have succeeded.
+      const auto commit_transaction = [&](const ant::game::TransactionResult& prepared,
+                                          const char* success) -> bool {
+        if (!prepared.accepted) {
+          saves.set_status(prepared.error);
+          return false;
+        }
+        const ant::persistence::SaveResult result = save_service->commit(*prepared.candidate);
+        if (!result.committed) {
+          saves.set_status(std::string("Not saved, nothing changed: ") + result.error);
+          return false;
+        }
+        adopt(identity, *result.profile);
+        saves.set_status(success);
+        return true;
+      };
+
       if (recovery_prompt) {
         if (renderer.recover_requested() && recovery_backup && save_service) {
           const ant::persistence::SaveResult restored =
               save_service->recover_backup(*recovery_backup);
-          if (restored.committed && restored.profile->run) {
-            session.emplace(ant::game::Session::restore(*restored.profile->run));
-            identity = {restored.profile->profile_id, restored.profile->run->run_id,
-                        restored.profile->meta, restored.profile->settings};
+          if (restored.committed) {
+            adopt(identity, *restored.profile);
             speed = restored.profile->settings.preferred_speed;
+            between_runs = !restored.profile->run.has_value();
+            if (restored.profile->run) {
+              session.emplace(ant::game::Session::restore(*restored.profile->run));
+            } else {
+              session.emplace(options.seed, content,
+                              ant::game::trait_modifiers(restored.profile->meta));
+            }
             recovery_prompt = false;
             recovery_backup.reset();
             saves.set_status("Restored revision " + std::to_string(restored.profile->revision));
@@ -269,9 +335,11 @@ int main(const int argc, char** argv) {
           speed = 1;
           // Retains the unreadable file for diagnosis instead of overwriting it.
           const ant::persistence::SaveResult fresh =
-              save_service->replace_unreadable(build_candidate(identity, *session, speed));
+              save_service->replace_unreadable(build_candidate(identity, *session, speed, false));
           if (fresh.committed) {
+            adopt(identity, *fresh.profile);
             recovery_prompt = false;
+            between_runs = false;
             recovery_backup.reset();
             saves.set_status("Started a new colony; the damaged file was kept for diagnosis");
           } else {
@@ -299,6 +367,46 @@ int main(const int argc, char** argv) {
         }
       }
       if (renderer.save_requested()) saves.request_manual();
+
+      if (save_service && !recovery_prompt) {
+        if (renderer.flight_requested() && !between_runs) {
+          ant::game::ProfileSnapshot current = build_candidate(identity, *session, speed, false);
+          current.revision = identity.revision;
+          const auto prepared =
+              ant::game::prepare_flight(current, *session, identity.run_id, identity.revision);
+          if (commit_transaction(prepared, "The flight succeeded. Genetic Legacy is yours.")) {
+            between_runs = true;
+            paused = true;
+          }
+        } else if (const auto branch = renderer.trait_requested(); branch && between_runs) {
+          ant::game::ProfileSnapshot current = build_candidate(identity, *session, speed, true);
+          current.revision = identity.revision;
+          const auto prepared =
+              ant::game::prepare_trait_purchase(current, *branch, identity.revision);
+          static_cast<void>(commit_transaction(
+              prepared, TextFormat("%s improved permanently", ant::game::trait_branch_name(*branch))));
+        } else if (renderer.new_run_requested() && between_runs) {
+          ant::game::ProfileSnapshot current = build_candidate(identity, *session, speed, true);
+          current.revision = identity.revision;
+          const auto prepared =
+              ant::game::prepare_new_run(current, options.seed + identity.meta.generation, content,
+                                         identity.revision);
+          if (prepared.accepted && save_service) {
+            const ant::persistence::SaveResult result = save_service->commit(*prepared.candidate);
+            if (result.committed) {
+              adopt(identity, *result.profile);
+              session.emplace(ant::game::Session::restore(*result.profile->run));
+              between_runs = false;
+              paused = false;
+              saves.set_status("A new colony is founded");
+            } else {
+              saves.set_status(std::string("Not saved, nothing changed: ") + result.error);
+            }
+          } else if (!prepared.accepted) {
+            saves.set_status(prepared.error);
+          }
+        }
+      }
       renderer.clear_requests();
 
       // Real seconds decide only when to write; they never advance the colony.
@@ -307,18 +415,23 @@ int main(const int argc, char** argv) {
       if (due != ant::app::SaveTrigger::None) commit(due);
 
       simulation_limited = false;
-      if (!paused && !recovery_prompt) {
+      if (!paused && !recovery_prompt && !between_runs) {
         if (raw_delta > 0.5F) {
           accumulator = 0.0;
           simulation_limited = true;
         } else {
           accumulator += static_cast<double>(std::min(raw_delta, 0.25F)) * speed;
-          if (accumulator > 0.5) {
-            accumulator = 0.5;
+          // Budget enough whole ticks for the selected speed to be real at a low frame rate;
+          // 20x at 30 Hz needs 13 ticks per frame. Speed still changes the number of whole ticks,
+          // never the size of one.
+          const double accumulator_cap = std::max(0.5, 0.05 * speed * 2.0);
+          const int step_cap = std::max(8, speed * 2);
+          if (accumulator > accumulator_cap) {
+            accumulator = accumulator_cap;
             simulation_limited = true;
           }
           int steps = 0;
-          while (accumulator >= 0.05 && steps < 8) {
+          while (accumulator >= 0.05 && steps < step_cap) {
             session->step();
             accumulator -= 0.05;
             ++steps;
@@ -329,7 +442,10 @@ int main(const int argc, char** argv) {
         }
       }
 
-      const ant::game::GameView view = ant::game::make_view(*session);
+      ant::game::GameView view = ant::game::make_view(*session);
+      const ant::game::FlightPreview flight = view.legacy.flight;
+      view.legacy = legacy_view(identity, between_runs);
+      view.legacy.flight = flight;
       BeginDrawing();
       renderer.draw(view, accumulator / 0.05, paused, speed, simulation_limited);
       EndDrawing();
@@ -349,7 +465,7 @@ int main(const int argc, char** argv) {
     // Orderly exit save, after the window is down so a slow write cannot stall the last frame.
     if (save_service && !recovery_prompt) {
       const ant::persistence::SaveResult result =
-          save_service->commit(build_candidate(identity, *session, speed));
+          save_service->commit(build_candidate(identity, *session, speed, between_runs));
       if (!result.committed) {
         std::cerr << "ant_farm: exit save failed: " << result.error << '\n';
         return 1;

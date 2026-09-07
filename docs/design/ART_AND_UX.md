@@ -45,7 +45,7 @@ Default window 1440x900 logical pixels; minimum supported 1024x640. UI scales in
 │                                               │ [Selected ant]     │
 │                                               │ Carrying protein   │
 ├───────────────────────────────────────────────┴────────────────────┤
-│ [Pause] [1x] [2x] [5x]      Generation 1    [Colony] [Flight] [Menu] │
+│ [Pause] [1x] [5x] [20x]     Generation 1    [Colony] [Flight] [Menu] │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -71,7 +71,7 @@ The numeric HUD is a final-state mock, not starting values. “Growing steadily�
 
 - Left click selects; empty space clears selection. Middle drag or right drag pans; WASD/arrow keys pan when gameplay owns focus.
 - Wheel zooms toward pointer; `+`/`-` zoom about viewport center. Clamp camera to useful bounds.
-- Space toggles pause; 1/2/3 choose 1x/2x/5x. Escape closes a panel or opens pause menu.
+- Space toggles pause; 1/2/3 choose 1x/5x/20x. Escape closes a panel or opens pause menu.
 - Tab/Shift-Tab moves through controls; Enter/Space activates focused UI without also triggering gameplay pause.
 - UI consumes input before world picking. A purchase can never also click terrain underneath it.
 - Minimum 16 logical-pixel body text, 36 logical-pixel button height, visible keyboard focus, labeled icons, scalable UI (100/125/150%). Pixel styling applies to world art, not tiny unreadable text.

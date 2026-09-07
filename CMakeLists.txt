@@ -46,6 +46,8 @@ target_link_libraries(ant_sim PUBLIC EnTT::EnTT)
 ant_configure_target(ant_sim)
 
 add_library(ant_game
+  src/game/policy.cpp
+  src/game/prestige.cpp
   src/game/progression.cpp
   src/game/session.cpp
   src/game/view.cpp
@@ -115,6 +117,9 @@ if(BUILD_TESTING)
     src/app/save_coordinator.cpp
     src/app/window_size.cpp
     tests/unit/grid_tests.cpp
+    tests/unit/maturity_tests.cpp
+    tests/unit/policy_tests.cpp
+    tests/unit/prestige_tests.cpp
     tests/unit/navigation_tests.cpp
     tests/unit/progression_tests.cpp
     tests/unit/rng_tests.cpp

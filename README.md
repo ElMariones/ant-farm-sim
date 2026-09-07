@@ -2,7 +2,7 @@
 
 A desktop incremental game about nurturing an autonomous ant colony: watch tunnels grow, improve the colony's habits, and send a new generation into the world.
 
-**Status: M0–M3 complete.** The deterministic living colony chooses work from changing needs, lays and nurses brood, excavates connected tunnels, carries spoil, follows bounded food trails, ages, dies, and cleans recoverable remains. It now also earns Work from productive labour, spends it on four ten-level adaptations, and saves durably: closing the game and reopening it continues the same colony, tick for tick. Prestige and permanent traits begin in M4.
+**Status: M0–M4 complete.** The deterministic living colony chooses work from changing needs, lays and nurses brood, excavates connected tunnels, carries spoil, follows bounded food trails, ages, dies, and cleans recoverable remains. It now also earns Work from productive labour, spends it on four ten-level adaptations, and saves durably: closing the game and reopening it continues the same colony, tick for tick. A mature colony raises winged queens, sends a nuptial flight for Genetic Legacy, and founds a stronger next colony with permanent traits. The final player-facing UI, profiling and packaging remain in M5.
 
 ## Start here
 
@@ -17,6 +17,7 @@ A desktop incremental game about nurturing an autonomous ant colony: watch tunne
 - [Implementation backlog](docs/planning/BACKLOG.md): ordered work packets and acceptance criteria.
 - [Validation plan](docs/engineering/VALIDATION.md): headless tests, benchmarks, and visual review.
 - [Project status](docs/planning/STATUS.md): current state and next task.
+- [Balance report](docs/planning/BALANCE_REPORT.md): measured seeded runs, pacing, and second-run proof.
 - [Decision log](docs/planning/DECISIONS.md): rationale and deferred features.
 - [Session handoff](docs/planning/HANDOFF_TEMPLATE.md): reusable implementation-session checklist.
 
@@ -33,9 +34,9 @@ ctest --preset dev
 ./build/dev/ant_farm --seed 42
 ```
 
-The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/2×/5× speed. Its calm paper-and-diorama interface uses a high-resolution bundled Nunito atlas with DPI-aware rendering for crisp Retina text. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
+The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/5×/20× speed. Its calm paper-and-diorama interface uses a high-resolution bundled Nunito atlas with DPI-aware rendering for crisp Retina text. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
 
-`F1`–`F4` buy the four run adaptations, `B`/`G`/`X`/`F` set colony focus once twelve workers are alive, and `S` saves immediately. The same actions are available as temporary cards and buttons in the inspector panel; T014 replaces them with the final layout.
+`F1`–`F4` buy the four run adaptations, `B`/`G`/`X`/`F` set colony focus once twelve workers are alive, and `S` saves immediately. `L` opens the flight and Legacy panel: it shows the readiness checklist and the exact payout while a colony is running, and between colonies it sells permanent traits (`V` Vigor, `Y` Industry) and founds the next colony (`C`). `Enter` sends the flight when every condition is met. The same actions are available as temporary cards and buttons in the inspector panel; T014 replaces them with the final layout.
 
 ### Saving
 
@@ -60,6 +61,14 @@ The headless runner also accepts `--save-dir PATH` with `--save` and `--resume`,
 ./build/headless/ant_headless --seed 42 --ticks 4000 --save-dir /tmp/ant --save
 ./build/headless/ant_headless --seed 42 --ticks 4000 --save-dir /tmp/ant --resume
 ./build/headless/ant_headless --seed 42 --ticks 3000 --verify-round-trip
+```
+
+`--policy none|buy-cheapest` runs a deterministic scripted player and reports run milestones as
+JSON; `--vigor N` and `--industry N` found the colony with permanent traits, for second-run
+comparisons. Measured results are in the [balance report](docs/planning/BALANCE_REPORT.md).
+
+```sh
+./build/headless/ant_headless --seed 42 --ticks 216000 --policy buy-cheapest
 ```
 
 For an optimized build:

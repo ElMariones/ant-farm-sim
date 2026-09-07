@@ -17,6 +17,9 @@ struct ActorState {
   Cargo cargo{};
   bool worker{};
   Movement movement{};
+  // Whether the saved path was still current for the live navigation topology. Revision numbers
+  // themselves are rebuilt on load, so validity is stored as a fact rather than a raw counter.
+  bool path_valid{true};
   Forager forager{};
   WorkerMind mind{};
   Life life{};
@@ -54,6 +57,12 @@ struct WorldSnapshot {
   bool extinct{};
   Focus focus{Focus::Balanced};
   std::array<std::uint8_t, 4> adaptation_levels{};
+  TraitModifiers traits{};
+  bool mature{};
+  // Whether the cached frontier set was current for the live topology, for the same reason paths
+  // record their validity rather than a raw revision counter.
+  bool frontiers_valid{true};
+  std::uint64_t egg_assignment_counter{};
 };
 
 } // namespace ant::sim

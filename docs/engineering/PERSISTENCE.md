@@ -35,7 +35,9 @@ RunSnapshot includes run ID, seed, tick, RNG states, immutable base content snap
 
 Serialize component fields by stable names in ID order, enum strings or stable documented values, and explicit units. Never persist EnTT handles, pointers, raw struct bytes, wall-clock-derived biological age, or OS-specific paths in a run.
 
-For deterministic continuity preserve active paths and reservations in the snapshot. Rebuild BFS fields and spatial buckets on load; revalidate each saved path before use. If a valid old save cannot preserve behavioral continuity after a migration, say so in migration notes. Do not silently drop state and claim hash equivalence.
+For deterministic continuity preserve active paths and reservations in the snapshot. Rebuild BFS fields and spatial buckets on load; revalidate each saved path before use.
+
+Navigation revisions are rebuilt from scratch on load, so their absolute values cannot be compared across a save. Store *whether* a cached path and the frontier set were current for the live topology (`path_valid`, `frontiers_valid`) and restore that fact, marking anything stale with revision 0, which the grid never issues. Restoring a stale path as current skips a replan the live colony still owed itself, and the run silently diverges. If a valid old save cannot preserve behavioral continuity after a migration, say so in migration notes. Do not silently drop state and claim hash equivalence.
 
 ## Validation and migration
 

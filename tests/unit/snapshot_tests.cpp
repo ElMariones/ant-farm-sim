@@ -1,6 +1,7 @@
 #include "game/session.hpp"
 #include "game/snapshot.hpp"
 #include "persistence/profile_codec.hpp"
+#include "sim/snapshot.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -151,7 +152,7 @@ TEST_CASE("malformed, oversized and unknown-schema input is rejected without tou
   }
   SECTION("newer schema version") {
     json document = decode_to_json(profile);
-    document["schema_version"] = 2;
+    document["schema_version"] = ant::game::kCurrentSchemaVersion + 1;
     const auto result = ant::persistence::decode_profile(document.dump());
     CHECK_FALSE(result.profile.has_value());
     CHECK(result.error.find("schema_version") != std::string::npos);
@@ -304,4 +305,106 @@ TEST_CASE("a resumed run stays paused at its saved tick", "[persistence][snapsho
   CHECK(restored.world().tick() == saved_tick);
   CHECK(restored.world().stats().delivered == session.world().stats().delivered);
   CHECK(restored.world().canonical_hash() == session.world().canonical_hash());
+}
+
+
+namespace {
+
+// Rewrites a current profile document into the schema 1 shape M3 shipped, so the migration is
+// exercised against a real colony rather than a hand-written stub.
+json downgrade_to_schema_one(json document) {
+  document["schema_version"] = 1;
+  document.erase("last_flight_receipt");
+  json& world = document.at("run").at("world");
+  world.erase("traits");
+  world.erase("mature");
+  world.erase("egg_assignment_counter");
+  world.at("stats").erase("gynes_born");
+  for (json& item : world.at("brood")) item.erase("role");
+  return document;
+}
+
+} // namespace
+
+TEST_CASE("a schema 1 profile migrates forward and keeps its colony",
+          "[persistence][snapshot][migration]") {
+  ant::game::Session session = busy_session(42, 4'000);
+  REQUIRE_FALSE(session.world().brood().empty());
+  const json current = decode_to_json(ant::persistence::make_new_profile(session));
+  const json legacy = downgrade_to_schema_one(current);
+
+  // The old document really is missing the schema 2 fields.
+  REQUIRE_FALSE(legacy.at("run").at("world").contains("traits"));
+  REQUIRE_FALSE(legacy.contains("last_flight_receipt"));
+
+  const ant::persistence::DecodeResult decoded =
+      ant::persistence::decode_profile(legacy.dump());
+  REQUIRE(decoded.profile.has_value());
+  CHECK(decoded.profile->schema_version == ant::game::kCurrentSchemaVersion);
+  CHECK_FALSE(decoded.profile->last_flight_receipt.has_value());
+  REQUIRE(decoded.profile->run.has_value());
+
+  const ant::sim::WorldSnapshot& world = decoded.profile->run->world;
+  CHECK(world.traits == ant::sim::TraitModifiers{});
+  CHECK_FALSE(world.mature);
+  CHECK(world.egg_assignment_counter == 0);
+  CHECK(world.stats.gynes_born == 0);
+  for (const auto& item : world.brood) CHECK(item.role == ant::sim::BroodRole::Worker);
+
+  // The migrated colony is still the same colony.
+  const ant::game::Session restored = ant::game::Session::restore(*decoded.profile->run);
+  CHECK(restored.world().canonical_hash() == session.world().canonical_hash());
+  CHECK(restored.world().tick() == session.world().tick());
+  CHECK(restored.world().invariant_holds());
+}
+
+TEST_CASE("a schema 1 profile that is still invalid is rejected after migration",
+          "[persistence][snapshot][migration]") {
+  ant::game::Session session = busy_session(42, 800);
+  json legacy = downgrade_to_schema_one(decode_to_json(ant::persistence::make_new_profile(session)));
+  legacy["run"]["world"]["next_id"] = 1;
+  CHECK_FALSE(ant::persistence::decode_profile(legacy.dump()).profile.has_value());
+}
+
+
+TEST_CASE("stale paths and frontier caches keep their staleness across a save",
+          "[persistence][snapshot][determinism]") {
+  // Regression: restoring used to mark every saved path and the frontier cache as current, so a
+  // colony that owed itself a replan resumed without one and diverged from an uninterrupted run.
+  ant::game::Session live = session_carrying_cargo(7);
+  // Change the terrain so the live world now holds stale navigation state.
+  live.debug_world().debug_grid().set({live.world().home().x + 2, 40}, ant::sim::Material::Soil);
+
+  const ant::persistence::DecodeResult decoded = ant::persistence::decode_profile(
+      ant::persistence::encode_profile(ant::persistence::make_new_profile(live)));
+  REQUIRE(decoded.profile.has_value());
+  ant::game::Session resumed = ant::game::Session::restore(*decoded.profile->run);
+  REQUIRE(resumed.world().canonical_hash() == live.world().canonical_hash());
+
+  live.step_ticks(2'000);
+  resumed.step_ticks(2'000);
+  CHECK(resumed.world().canonical_hash() == live.world().canonical_hash());
+  CHECK(resumed.world().stats().navigation_replans == live.world().stats().navigation_replans);
+  CHECK(resumed.world().stats().path_requests == live.world().stats().path_requests);
+}
+
+TEST_CASE("clearing a route resets its cursor", "[world][navigation][persistence]") {
+  // A path and its cursor must be cleared together, or the snapshot records a cursor past the end
+  // of an empty path and the profile is rejected as invalid.
+  ant::game::Session session(42);
+  for (int tick = 0; tick < 40'000; ++tick) {
+    session.step();
+    if (session.world().stats().spoil_delivered == 0) continue;
+    // Just after spoil is delivered the carrier's route is cleared.
+    for (const auto& actor : session.world().snapshot().actors) {
+      if (!actor.worker) continue;
+      CHECK(actor.movement.next_cell <= actor.movement.path.size());
+    }
+    break;
+  }
+  REQUIRE(session.world().stats().spoil_delivered > 0);
+  const ant::persistence::DecodeResult decoded = ant::persistence::decode_profile(
+      ant::persistence::encode_profile(ant::persistence::make_new_profile(session)));
+  CHECK(decoded.profile.has_value());
+  CHECK(decoded.error.empty());
 }

@@ -28,12 +28,17 @@ public:
   [[nodiscard]] std::optional<sim::Focus> focus_requested() const { return focus_requested_; }
   [[nodiscard]] bool save_requested() const { return save_requested_; }
   [[nodiscard]] bool recover_requested() const { return recover_requested_; }
+  [[nodiscard]] bool flight_requested() const { return flight_requested_; }
+  [[nodiscard]] bool new_run_requested() const { return new_run_requested_; }
+  [[nodiscard]] std::optional<game::TraitBranch> trait_requested() const { return trait_requested_; }
+  [[nodiscard]] bool legacy_panel_open() const { return legacy_panel_open_; }
   [[nodiscard]] bool new_colony_requested() const { return new_colony_requested_; }
   void clear_requests();
   // Short save/recovery line shown in the footer, owned by the app coordinator.
   void set_status_line(std::string status) { status_line_ = std::move(status); }
   // While set, the app has an unreadable profile and is waiting for the player to choose.
   void set_recovery_prompt(bool prompt) { recovery_prompt_ = prompt; }
+  void open_legacy_panel() { legacy_panel_open_ = true; }
   void set_zoom(float zoom) { camera_.set_zoom(zoom); }
 
 private:
@@ -42,6 +47,7 @@ private:
                 bool selected);
   void draw_interface(const game::GameView& view, bool paused, int speed, bool simulation_limited);
   void draw_recovery_prompt() const;
+  void draw_legacy_panel(const game::GameView& view) const;
   [[nodiscard]] std::string truncate_to_width(const std::string& text, float max_width,
                                               float size) const;
   void update_selection(const game::GameView& view);
@@ -62,6 +68,10 @@ private:
   bool recover_requested_{};
   bool new_colony_requested_{};
   bool recovery_prompt_{};
+  bool legacy_panel_open_{};
+  bool flight_requested_{};
+  bool new_run_requested_{};
+  std::optional<game::TraitBranch> trait_requested_;
   std::string status_line_;
 };
 

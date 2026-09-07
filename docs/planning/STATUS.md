@@ -4,19 +4,17 @@ Updated: 2026-09-07.
 
 ## Current state
 
-**M0 through M3 are implemented.** The native raylib app and graphics-free headless runner share a deterministic C++20 simulation. Workers choose eligible jobs using normalized stimuli and weighted response draws, deposit into a bounded double-buffered trail field, excavate connected useful space, carry spoil, nurse brood, recover dropped food, clean mature corpses, and age or starve. The queen lays capacity-gated eggs; fed brood progresses through egg, larva, and pupa stages; decline and extinction are explicit states.
+**M0 through M4 are implemented.** The native raylib app and graphics-free headless runner share a deterministic C++20 simulation. Workers choose eligible jobs from normalized stimuli, deposit into a bounded trail field, excavate connected space, carry spoil, nurse brood, recover dropped food, clean corpses, and age or starve. The colony earns Work from productive labour and spends it on four ten-level run adaptations. Saving is durable and atomic, and reopening the game continues the same colony at the exact saved tick.
 
-The colony now also earns **Work** from productive worker ticks and spends it on four ten-level run adaptations that change dig rate, brood development, carry capacity, and laying interval. Colony focus unlocks at twelve workers and is rate limited. Store capacity grows with reachable nest air.
-
-Saving is durable and complete. One atomic `profile.json` plus a `profile.backup.json` previous revision are written through a temporary file, flush, backup, replace, and directory sync, under a single-writer lock. The game autosaves every 30 real seconds, on manual request, and on orderly exit, then resumes at exactly the saved tick with no offline advancement. An unreadable profile opens a paused recovery prompt rather than being overwritten.
+M4 completes the generation loop. A colony latches **maturity** at 100 living workers, 150 worker births and 12 simulated minutes; after that one egg in five becomes a **winged queen**, capped at ten live and developing combined. With three winged queens, a living founding queen and an unassisted run, the player can send a **nuptial flight**, which pays Genetic Legacy through a single committed profile revision carrying an immutable receipt. Between colonies, Legacy buys eight permanent trait tiers across Vigor and Industry, and founding the next colony applies the owned traits exactly once.
 
 ## Active scope
 
-**Next: M4 — Complete generation loop (T011).** Maturity latch, deterministic reproductive assignment, and winged-queen development, then transactional prestige and permanent traits.
+**Next: M5 — Release candidate (T014).** Replace the temporary economy and flight controls with the ART_AND_UX layout, onboarding and accessibility, then profile and package.
 
 Suggested prompt for a smaller model:
 
-> Read AGENTS.md and docs/planning/STATUS.md, then implement T011 from docs/planning/BACKLOG.md. Preserve deterministic command validation and exact integer accounting. Inspect existing changes first, run the documented headless and dev tests, update affected contracts and STATUS, and commit with the required identity and a descriptive body.
+> Read AGENTS.md and docs/planning/STATUS.md, then implement T014 from docs/planning/BACKLOG.md. Preserve deterministic command validation and exact integer accounting. Inspect existing changes first, run the documented headless and dev tests, update affected contracts and STATUS, and commit with the required identity and a descriptive body.
 
 ## Milestone state
 
@@ -27,56 +25,74 @@ Suggested prompt for a smaller model:
 | M1 Watchable slice | Complete — T002–T004 |
 | M2 Living colony | Complete — T005–T007 |
 | M3 Safe incremental slice | Complete — T008–T010 |
-| M4 Complete generation loop | Not started |
+| M4 Complete generation loop | Complete — T011–T013 |
 | M5 Release candidate | Not started |
 
 ## Environment observations
 
-Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.4.3 using Unix Makefiles. Python fonttools 4.63 was installed to instantiate the pinned Nunito variable source at weight 650; the runtime has no Python dependency. First configure downloads pinned source dependencies; warmed headless configure/build has no graphics dependency. `clang-format` is not installed on this machine and CI does not gate on formatting, so no reformatting pass was run.
+Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.4.3 using Unix Makefiles. First configure downloads pinned source dependencies; warmed headless configure/build has no graphics dependency, and the headless binary links only libc++ and libSystem. `clang-format` is not installed on this machine and CI does not gate on formatting, so no reformatting pass was run.
 
 ## Validation of this deliverable
 
-Latest M3 commands and outcomes:
-
-- `cmake --preset headless`, `cmake --build --preset headless`, and `ctest --preset headless -E "sixty simulated minutes"`: pass, **60/60 tests** (24 before this task).
+- `cmake --build --preset headless` and `ctest --preset headless -E "sixty simulated minutes"`: pass, **94/94 tests** (60 before this task). Same suite passes under the `dev` preset.
 - `cmake --preset release` and `cmake --build --preset release`: pass.
-- Two production-settings Release soaks, `ant_headless --seed 101 --ticks 72000`, produce the same canonical hash `165f12aa79054393` and complete 60 simulated minutes with nonnegative stores and a live colony: 149 workers, 12 brood, 446 excavated cells, 275 births, 132 deaths, 4,981,602 productive ticks, 4,151 Work. One measured run completed in 7.67 seconds. The hash differs from M2's `24c7977a334507d5` because productive ticks and adaptation levels are now part of the canonical hash.
+- `ant_headless --verify-round-trip` passes at 20,000 / 60,000 / 100,000 / 120,000 / 140,000 / 160,000 / 200,000 ticks on seed 42, and at 40,000 and 120,000 ticks on seeds 1, 7, 101 and 2026.
 
-### T008 — Work and four run adaptations
+### Simulation speeds
 
-- Costs follow ECONOMY's `ceil(15 * 8^L / 5^L)` exactly, checked against an independently computed table for all ten levels of all four upgrades; effects are 25/10/20/15 percent per level.
-- Purchases spend exactly once; insufficient Work and maximum level are rejected without spending; rebuilding the view fifty times leaves levels and the canonical hash unchanged.
-- Work equals `productive_worker_ticks / ticks_per_work` at every tick of a 3,000-tick run, and is zero while no productive tick has occurred, so worker count alone never grants Work.
-- Every focus keeps forage, excavate and nurse reachable over a 4,000-tick window; focus is locked below twelve workers and refuses a second change inside the cooldown.
-- **Pacing was measured and the balance retuned.** At the original 200 ticks per Work the first 15-Work purchase arrived after a mean of 29.2 simulated seconds on seeds 1, 7, 42, 101 and 2026 — far inside the 2–4 minute target. Measured 800/1,000/1,200/1,400 alternatives and adopted **1,200** (mean 167.8 s, range 154.2–183.6 s), which lands every seed in the target window. ECONOMY records the before/after table. First delivery is 52.6–74.1 s and first birth 176.9–272.9 s on the same seeds.
+Speeds are now **1x / 5x / 20x** (previously 1x / 2x / 5x), on the footer buttons and keys `1`, `2`, `3`. The per-frame tick budget scales with the selected speed so 20x is real at a low frame rate rather than silently clamped; speed still changes the number of whole ticks, never the size of one. `preferred_speed` validation and the saved settings accept the new set.
 
-### T009 — Snapshot codec and round-trip continuation
+### T011 — Maturity and winged queens
 
-- A colony with cargo in transit, developing brood, live paths, deposited trails and both RNG streams advanced round-trips through the codec with an identical canonical hash, and continues to match an uninterrupted run after 4,000 further ticks.
-- Malformed, empty, non-object, oversized (>64 MiB) and unknown-schema documents are rejected with an actionable message, and the live colony's hash is unchanged afterwards.
-- Rejected: duplicate entity ids, non-monotonic `next_id`, reservation totals that disagree with their source, wrong-size terrain and trail arrays, an actor inside solid rock, upgrade level above ten, Work counters that disagree with the world, wallet ≠ earned − spent, phase/run disagreement, out-of-range settings, and an internally invalid embedded progression.
-- A saved run keeps its embedded balance when the shipped content changes; only a new run picks up current content.
+- Every maturity boundary is covered: age alone, population and births without the age, one birth short, one worker short, and all three together. A population collapse after latching does not revoke maturity.
+- No winged queens are allocated before maturity; afterwards the egg assignment counter tracks exactly the eggs laid since maturity and one in five becomes a gyne.
+- The combined cap of ten counts developing brood as well as adults, both while ten are in the nursery and after they emerge.
+- Gynes take exactly twice the trait-adjusted duration at every stage, never count toward worker births, and never take a job.
+- The assignment sequence, the maturity latch and the winged population survive a save and continue from where they left off.
+- Trait modifiers are verified individually: Vigor II founds eight workers instead of six, Vigor I shortens the egg stage to 540 ticks, Vigor III shortens larva and pupa to 1,020 and 765, and a gyne still doubles the trait-adjusted figure.
 
-### T010 — Durable saves and recovery
+### T012 — Transactional prestige and permanent traits
 
-- Failures injected at each save stage — candidate write, backup write, backup replace, final replace — all leave the previously committed revision byte-for-byte intact and remove their temporary files.
-- An interrupted replacement and a failed directory sync both report `committed` with `durability_uncertain`, after re-reading the authoritative file to establish the real revision.
-- A second `SaveService` on the same directory is refused while the first holds the lock; separate directories stay independently writable.
-- A corrupt current profile is never overwritten by an ordinary save; `load` reports `RecoveryAvailable`, and explicit recovery retains the original as `profile.corrupt.N.json` before committing the backup. Both files invalid reports `Invalid` rather than repairing anything.
-- Autosave fires once per 30 real seconds and not as a catch-up burst after a 10-minute stall; a manual request takes priority and is consumed once; nothing is scheduled while the recovery prompt is open.
-- **Real file round trip:** `ant_headless --seed 42 --ticks 4000 --save-dir … --save` then `--ticks 4000 --resume --save` produced hash `d91f218722432923`, identical to the uninterrupted `--ticks 8000` run, with `profile.json` at revision 2 and `profile.backup.json` at revision 1. `--verify-round-trip` passes on seeds 1, 7 and 42.
-- **Real app quit/relaunch:** launching `ant_farm --save-dir …` wrote revision 1 on exit; relaunching resumed that colony (backup tick 6015, current tick 6036), showed "Colony resumed (revision 1)" in the footer, and preserved profile id, run id, settings and the embedded balance.
+- `integer_sqrt` is exact across the full 64-bit domain, checked at every perfect square and boundary up to 3,000 and at values where a double has already lost precision.
+- Documented payouts reproduce exactly: 4 at eligibility, 6 at 600 births with 6 queens, 8 at 1,350 births with 10 queens, with the step boundaries at 150/600/1,350/2,400 births and 3/6/9 queens, and more than ten live queens never counting for more than ten.
+- Each blocking condition is named correctly: immature, too few winged queens, dead queen, assisted run.
+- A flight credits Legacy exactly once. A replay against the committed profile, a revision the caller has not seen, a command naming a different run, and a profile that already flew are all refused.
+- A failed commit leaves the live colony and the profile untouched: the candidate is never adopted unless the write succeeded.
+- Interrupted before replacement, the run is still eligible and still pays 4. After replacement, the reward is credited once, the receipt names the run, and loading the between-runs profile runs no payout logic.
+- A repeated tier purchase cannot overspend: the second click is stale, and a fresh view has nothing left to spend. The cost table is exactly 3/7/15/32, one branch costs 57, and tiers are refused beyond four and while a run is active.
+- Industry IV lowers the Work threshold from 1,200 to 960 ticks exactly once.
+- The full flight → shop → new colony flow was exercised through a real `SaveService`, committing one step at a time, and the founded colony carries the bought trait with zero Work and zero adaptations.
+
+### T013 — Seeded balance and second-run proof
+
+Full numbers in [BALANCE_REPORT](BALANCE_REPORT.md). Summary:
+
+- **All ten policy runs survive.** No-purchase colonies reach flight in 40.1–40.3 minutes, buy-cheapest in 30.3–30.9 minutes; both inside ECONOMY's 30–45 minute target. First investment lands at 2.7–2.9 minutes, inside the 2–4 minute target.
+- Investing removes about ten minutes from the run, roughly quarters the death count, and adds about 30 workers at peak.
+- **Vigor I reduces time to first birth on all five seeds** (−5 to −21 s), which is the required second-run proof.
+- **Industry I does not reduce time to an excavation target**; four of five seeds get slower. The mechanism is measured and recorded rather than hidden: faster digging grows nest air, which raises store capacity, which pulls workers onto foraging. Recorded as an open balance question.
+- Three constant-tuning alternatives were measured and rejected because each caused more extinctions than it fixed. No ECONOMY constant was changed in T013.
+
+### Defects found and fixed during M4
+
+Four real bugs surfaced by pushing further than M3 did:
+
+1. **Foragers ignored colony need.** Source choice followed trail strength alone, so seed 1 with no purchases went extinct with its carbohydrate source untouched at 100,000, its carbohydrate store at 0 and protein pinned at capacity. Source choice now ranks by shortfall against the foraging target, counting food in transit.
+2. **Workers over-committed to a nearly full store**, then held undeliverable cargo indefinitely. Reservations now subtract food already carried.
+3. **Clearing a route left its cursor past the end**, producing a movement state that snapshot validation rejected — the app's exit save failed outright at 20,000 ticks. A path and its cursor are now cleared together.
+4. **Save/load lost path and frontier staleness**, so a resumed colony skipped a replan it still owed itself and diverged from an uninterrupted run after roughly 20,000 ticks. Staleness is now stored as a fact and restored with revision 0, which the grid never issues.
+
+The profile schema is **version 2**, with a tested in-memory v1 migration that fills castes, traits, the maturity latch and the flight receipt, and keeps the migrated colony's canonical hash.
 
 ### Visual review
 
-Reviewed at 1440×900 (zoom 4) and at the 1024×640 minimum (zoom 3.2) on Retina. The inspector shows Work, four adaptation cards with level and next cost, four focus buttons with the active one highlighted, the focus cooldown note, and a bottleneck line. The footer shows the Save button and the save/resume status. Two defects were found and fixed during review: the recovery panel's em dashes rendered as `?` because the bundled font atlas only covers printable ASCII, and a long decoder error overflowed the panel — both status lines are now ASCII and truncated to their container. A pre-existing 20-pixel mismatch between the drawn adaptation cards and their click rectangles was also fixed by giving both a single geometry helper.
-
-Raylib's high-DPI `TakeScreenshot` still produces a doubled canvas that requires cropping for review; the rendered window content itself is sharp. Review screenshots are stored outside the repository under the session scratch directory.
+Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. The flight panel shows the readiness checklist with per-condition progress, the exact payout with its birth and queen components, and the next threshold computed from the rules. The between-colonies panel shows both trait branches with tier, cost and effect summary, and the found-next-colony action. A staged between-runs profile was opened in the real app and its exit save preserved `phase: BetweenRuns` with the receipt intact and no invented run. One layout defect was found and fixed: the focus buttons overlapped the excavation line, and the bottleneck line ran into the footer at the minimum height.
 
 ## Open work
 
-No blocker for T011.
+No blocker for T014.
 
-- **Keyboard activation of the recovery prompt was not exercised interactively.** The `R` and `N` handlers are three lines that call `recover_backup` and `replace_unreadable`, both covered by unit tests, and the prompt was rendered and photographed; the key presses themselves were not driven, because this session had no way to send input to the raylib window. Pointer activation of the new adaptation and focus controls was likewise not re-exercised.
-- `last_flight_receipt` from the PERSISTENCE envelope is not in the profile schema yet; it belongs to T012 with the rest of prestige.
-- Player economy UI is temporary cards pending T014. Trails bias source choice but are not yet rendered as a debug overlay. Balance runs across the full purchase policy, larger-population profiling, and `.app` packaging remain in their scheduled milestones. No project license has been chosen.
+- **Keyboard activation was not exercised interactively.** The flight, trait and found-colony key handlers were verified through unit tests against a real `SaveService` and their panels were rendered and photographed, but this session had no way to send key presses to the raylib window. The same limitation applies to the recovery prompt's `R`/`N` keys from M3.
+- **Excavation task selection is O(workers²) per tick.** Each excavating worker scans every worker to count frontier claims, costing about 22 ms per tick at 159 workers in a Debug build. This dominates test runtimes and is the first thing T015 should measure.
+- Industry I has no metric that improves; payouts of 6 and 8 are verified arithmetically but not reached in a measured run. Both are recorded in the balance report.
+- Player-facing UI is still temporary cards and key bindings pending T014. Trails bias source choice but are not rendered as a debug overlay. Profiling, ASan/UBSan and `.app` packaging remain in M5. No project license has been chosen.

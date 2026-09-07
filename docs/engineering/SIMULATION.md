@@ -104,3 +104,20 @@ Queen death latches Decline. Extinction is recomputed after death/maturation/spa
 Initial hard bounds: 5,000 workers, 5,000 brood, 10 winged queens/winged brood combined, 20,000 total entities including corpses/cargo. When capacity is reached, refuse spawning/laying and expose a diagnostic; retain existing entities and allow cleanup. Source count, path queue, and event counts are bounded too.
 
 Track tick time, each system time, path requests/expansions, stuck-worker seconds, delivered food, resource sinks, births/deaths, and population. Debug invariant failures include seed/tick/system for reproduction. Runtime should not generate logs every tick by default.
+
+
+## Source choice follows colony need (T013)
+
+A forager picks between the two sources by the larger **shortfall** of that source's nutrient
+against the same 50%-of-current-capacity target the foraging stimulus uses, counting food already
+picked up and on its way home. Trail strength only breaks a tie.
+
+A reservation is capped by the room actually left in the destination store: capacity minus the
+stored amount, minus food already carried toward it, minus what is already reserved at the source.
+Without that, several foragers each reserve a full load for a nutrient with room for one, and the
+losers hold undeliverable cargo in `WaitingForStorage` indefinitely while the colony starves for
+the other nutrient. Both rules were added after a measured colony death; see the
+[balance report](../planning/BALANCE_REPORT.md).
+
+A path and its cursor are cleared together. Clearing a path while leaving `next_cell` past its end
+produces a movement state that snapshot validation rejects.

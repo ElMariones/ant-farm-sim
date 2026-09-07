@@ -28,6 +28,15 @@ struct MetaSnapshot {
   std::uint64_t successful_flights{};
 };
 
+// Immutable proof that one flight was paid out. Written in the same committed revision as the
+// wallet update, so a repeated or stale flight command cannot credit Legacy twice.
+struct FlightReceipt {
+  std::string run_id;
+  std::int64_t earned_legacy{};
+  std::uint64_t births{};
+  int winged_queens{};
+};
+
 struct RunSnapshot {
   std::string run_id;
   ProgressionConfig embedded_progression;
@@ -40,14 +49,17 @@ struct RunSnapshot {
   sim::WorldSnapshot world;
 };
 
+inline constexpr std::uint32_t kCurrentSchemaVersion = 2;
+
 struct ProfileSnapshot {
-  std::uint32_t schema_version{1};
+  std::uint32_t schema_version{kCurrentSchemaVersion};
   std::uint64_t revision{};
   std::string content_version{"m3-v1"};
   std::string profile_id;
   ProfilePhase phase{ProfilePhase::ActiveRun};
   MetaSnapshot meta;
   SettingsSnapshot settings;
+  std::optional<FlightReceipt> last_flight_receipt;
   std::optional<RunSnapshot> run;
 };
 

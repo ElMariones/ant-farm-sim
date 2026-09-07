@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game/prestige.hpp"
 #include "game/session.hpp"
 
 #include <array>
@@ -9,6 +10,20 @@
 namespace ant::game {
 
 enum class Bottleneck : std::uint8_t { None, Nutrition, Nursing, NurserySpace, QueenOutput, Labor };
+
+// Profile-level progression the session itself does not own. The app fills this in from the
+// committed profile after building the view.
+struct LegacyView {
+  bool between_runs{};
+  std::int64_t wallet{};
+  std::uint8_t vigor_tier{};
+  std::uint8_t industry_tier{};
+  std::int64_t vigor_cost{-1};
+  std::int64_t industry_cost{-1};
+  std::uint64_t generation{1};
+  std::uint64_t successful_flights{};
+  FlightPreview flight;
+};
 
 struct GameView {
   std::uint64_t seed{};
@@ -40,6 +55,7 @@ struct GameView {
   std::array<std::uint8_t, 4> upgrade_levels{};
   std::array<std::int64_t, 4> upgrade_costs{};
   Bottleneck bottleneck{Bottleneck::None};
+  LegacyView legacy;
 };
 
 [[nodiscard]] GameView make_view(const Session& session);

@@ -8,8 +8,9 @@
 
 namespace ant::game {
 
-Session::Session(const std::uint64_t seed, ProgressionConfig progression)
-    : world_(seed), progression_(std::move(progression)) {
+Session::Session(const std::uint64_t seed, ProgressionConfig progression,
+                 const sim::TraitModifiers traits)
+    : world_(seed, traits), progression_(std::move(progression)) {
   std::string error;
   if (!validate_progression(progression_, error)) throw std::invalid_argument(error);
 }
@@ -23,8 +24,9 @@ void Session::step() {
   if (productive < accounted_productive_ticks_) throw std::logic_error("productive tick counter regressed");
   productive_tick_remainder_ += productive - accounted_productive_ticks_;
   accounted_productive_ticks_ = productive;
-  const std::uint64_t earned = productive_tick_remainder_ / progression_.productive_ticks_per_work;
-  productive_tick_remainder_ %= progression_.productive_ticks_per_work;
+  const std::uint64_t block = effective_ticks_per_work();
+  const std::uint64_t earned = productive_tick_remainder_ / block;
+  productive_tick_remainder_ %= block;
   if (earned > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() - work_)) {
     throw std::overflow_error("Work total overflow");
   }
@@ -88,7 +90,10 @@ RunSnapshot Session::snapshot(std::string run_id) const {
 Session Session::restore(const RunSnapshot& snapshot) {
   std::string error;
   if (!validate_progression(snapshot.embedded_progression, error)) throw std::invalid_argument(error);
-  if (snapshot.productive_tick_remainder >= snapshot.embedded_progression.productive_ticks_per_work ||
+  const std::uint64_t restored_block =
+      snapshot.embedded_progression.productive_ticks_per_work *
+      (snapshot.world.traits.industry_tier >= 4 ? 80U : 100U) / 100U;
+  if (snapshot.productive_tick_remainder >= restored_block ||
       snapshot.accounted_productive_ticks != snapshot.world.stats.productive_worker_ticks ||
       snapshot.upgrade_levels != snapshot.world.adaptation_levels) {
     throw std::invalid_argument("run progression counters are inconsistent");
@@ -102,6 +107,11 @@ Session Session::restore(const RunSnapshot& snapshot) {
   session.next_focus_change_tick_ = snapshot.next_focus_change_tick;
   session.assisted_ = snapshot.assisted;
   return session;
+}
+
+std::uint64_t Session::effective_ticks_per_work() const {
+  const std::uint64_t base = progression_.productive_ticks_per_work;
+  return world_.traits().industry_tier >= 4 ? base * 80 / 100 : base;
 }
 
 void Session::debug_grant_work(const std::int64_t amount) {

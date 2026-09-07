@@ -109,10 +109,10 @@ void Renderer::draw_button(const Rectangle bounds, const char* label, const bool
 
 namespace {
 
-constexpr float kUpgradeCardTop = 434.0F;
-constexpr float kUpgradeCardHeight = 31.0F;
-constexpr float kUpgradeCardStride = 36.0F;
-constexpr float kFocusButtonTop = 371.0F;
+constexpr float kUpgradeCardTop = 436.0F;
+constexpr float kUpgradeCardHeight = 30.0F;
+constexpr float kUpgradeCardStride = 34.0F;
+constexpr float kFocusButtonTop = 380.0F;
 
 Rectangle upgrade_card_bounds(const int panel_x, const int panel_width, const int index) {
   return {static_cast<float>(panel_x + 18), kUpgradeCardTop + kUpgradeCardStride * index,
@@ -137,9 +137,9 @@ void Renderer::update_input(const float delta_seconds) {
   if (IsKeyPressed(KEY_ONE)) {
     speed_requested_ = 1;
   } else if (IsKeyPressed(KEY_TWO)) {
-    speed_requested_ = 2;
-  } else if (IsKeyPressed(KEY_THREE)) {
     speed_requested_ = 5;
+  } else if (IsKeyPressed(KEY_THREE)) {
+    speed_requested_ = 20;
   }
   if (IsKeyPressed(KEY_I)) {
     inspector_open_ = !inspector_open_;
@@ -154,6 +154,16 @@ void Renderer::update_input(const float delta_seconds) {
   else if (IsKeyPressed(KEY_X)) focus_requested_ = sim::Focus::Expansion;
   else if (IsKeyPressed(KEY_F)) focus_requested_ = sim::Focus::Foraging;
   if (IsKeyPressed(KEY_S)) save_requested_ = true;
+  if (!recovery_prompt_) {
+    if (IsKeyPressed(KEY_L)) legacy_panel_open_ = !legacy_panel_open_;
+    if (legacy_panel_open_) {
+      if (IsKeyPressed(KEY_ENTER)) flight_requested_ = true;
+      if (IsKeyPressed(KEY_V)) trait_requested_ = game::TraitBranch::Vigor;
+      if (IsKeyPressed(KEY_Y)) trait_requested_ = game::TraitBranch::Industry;
+      if (IsKeyPressed(KEY_C)) new_run_requested_ = true;
+      if (IsKeyPressed(KEY_ESCAPE)) legacy_panel_open_ = false;
+    }
+  }
   if (recovery_prompt_) {
     if (IsKeyPressed(KEY_R)) recover_requested_ = true;
     if (IsKeyPressed(KEY_N)) new_colony_requested_ = true;
@@ -167,9 +177,9 @@ void Renderer::update_input(const float delta_seconds) {
     } else if (CheckCollisionPointRec(mouse, {130.0F, footer_y, 58.0F, 42.0F})) {
       speed_requested_ = 1;
     } else if (CheckCollisionPointRec(mouse, {194.0F, footer_y, 58.0F, 42.0F})) {
-      speed_requested_ = 2;
-    } else if (CheckCollisionPointRec(mouse, {258.0F, footer_y, 58.0F, 42.0F})) {
       speed_requested_ = 5;
+    } else if (CheckCollisionPointRec(mouse, {258.0F, footer_y, 58.0F, 42.0F})) {
+      speed_requested_ = 20;
     } else if (CheckCollisionPointRec(mouse, {330.0F, footer_y, 78.0F, 42.0F})) {
       save_requested_ = true;
     } else if (inspector_open_) {
@@ -193,7 +203,101 @@ void Renderer::draw(const game::GameView& view, const double interpolation_alpha
   ClearBackground(kDeepSoil);
   draw_world(view, interpolation_alpha);
   draw_interface(view, paused, speed, simulation_limited);
+  if (legacy_panel_open_) draw_legacy_panel(view);
   if (recovery_prompt_) draw_recovery_prompt();
+}
+
+void Renderer::draw_legacy_panel(const game::GameView& view) const {
+  const int width = GetScreenWidth();
+  const int height = GetScreenHeight();
+  DrawRectangle(0, 0, width, height, Color{24, 28, 25, 180});
+  const float panel_width = static_cast<float>(std::min(width - 80, 640));
+  const Rectangle panel{(static_cast<float>(width) - panel_width) * 0.5F,
+                        static_cast<float>(height) * 0.5F - 210.0F, panel_width, 420.0F};
+  DrawRectangleRounded(panel, 0.04F, 8, kPaper);
+  DrawRectangleRoundedLinesEx(panel, 0.04F, 8, 1.0F, kWarmLine);
+  const int left = static_cast<int>(panel.x) + 28;
+  int line = static_cast<int>(panel.y) + 26;
+  const game::LegacyView& legacy = view.legacy;
+
+  draw_text(legacy.between_runs ? "Between colonies" : "Nuptial flight", left, line, 23);
+  line += 34;
+  draw_text(TextFormat("Generation %llu   |   Flights %llu   |   Legacy %lld",
+                       static_cast<unsigned long long>(legacy.generation),
+                       static_cast<unsigned long long>(legacy.successful_flights),
+                       static_cast<long long>(legacy.wallet)),
+            left, line, 17, kMutedInk);
+  line += 34;
+
+  if (!legacy.between_runs) {
+    const game::FlightPreview& flight = legacy.flight;
+    draw_text("READINESS", left, line, 14, kMutedInk);
+    line += 24;
+    const auto tick = [](const bool done) { return done ? "[x]" : "[ ]"; };
+    draw_text(TextFormat("%s  Mature colony", tick(flight.mature)), left, line, 17);
+    line += 25;
+    draw_text(TextFormat("%s  Living workers  %d / 100", tick(flight.living_workers >= 100),
+                         flight.living_workers),
+              left, line, 17);
+    line += 25;
+    draw_text(TextFormat("%s  Workers born  %llu / 150", tick(flight.births >= 150),
+                         static_cast<unsigned long long>(flight.births)),
+              left, line, 17);
+    line += 25;
+    draw_text(TextFormat("%s  Run time  %llu / 720 s",
+                         tick(flight.run_ticks >= 720 * static_cast<unsigned>(sim::kTicksPerSecond)),
+                         static_cast<unsigned long long>(flight.run_ticks / sim::kTicksPerSecond)),
+              left, line, 17);
+    line += 25;
+    draw_text(TextFormat("%s  Winged queens  %d / 3", tick(flight.live_winged_queens >= 3),
+                         flight.live_winged_queens),
+              left, line, 17);
+    line += 34;
+    draw_text(TextFormat("Legacy on flight: %lld   (2 base + %lld births + %lld queens)",
+                         static_cast<long long>(flight.payout.total),
+                         static_cast<long long>(flight.payout.birth_bonus),
+                         static_cast<long long>(flight.payout.queen_bonus)),
+              left, line, 18);
+    line += 26;
+    if (flight.next_birth_threshold > 0) {
+      draw_text(TextFormat("Next step at %llu births%s",
+                           static_cast<unsigned long long>(flight.next_birth_threshold),
+                           flight.next_queen_threshold > 0
+                               ? TextFormat(" or %d winged queens", flight.next_queen_threshold)
+                               : ""),
+                left, line, 15, kMutedInk);
+    }
+    line += 34;
+    draw_text(flight.eligible ? "Enter  -  send the flight and end this colony"
+                              : game::flight_block_reason(flight.block),
+              left, line, 18, flight.eligible ? kInk : kMutedInk);
+  } else {
+    draw_text("PERMANENT TRAITS", left, line, 14, kMutedInk);
+    line += 26;
+    const auto cost_label = [](const std::int64_t cost) {
+      return cost < 0 ? "complete" : TextFormat("%lld Legacy", static_cast<long long>(cost));
+    };
+    draw_text(TextFormat("V   Vigor  tier %d/4   %s", legacy.vigor_tier,
+                         cost_label(legacy.vigor_cost)),
+              left, line, 18,
+              legacy.vigor_cost >= 0 && legacy.wallet >= legacy.vigor_cost ? kInk : kMutedInk);
+    line += 27;
+    draw_text("     Faster eggs, more founders, faster brood, thriftier queen", left, line, 14,
+              kMutedInk);
+    line += 30;
+    draw_text(TextFormat("Y   Industry  tier %d/4   %s", legacy.industry_tier,
+                         cost_label(legacy.industry_cost)),
+              left, line, 18,
+              legacy.industry_cost >= 0 && legacy.wallet >= legacy.industry_cost ? kInk : kMutedInk);
+    line += 27;
+    draw_text("     Faster digging, faster movement, bigger loads, cheaper Work", left, line, 14,
+              kMutedInk);
+    line += 40;
+    draw_text("C   -  found the next colony", left, line, 18);
+  }
+
+  draw_text("L or Escape closes this panel", left,
+            static_cast<int>(panel.y + panel.height) - 34, 15, kMutedInk);
 }
 
 std::string Renderer::truncate_to_width(const std::string& text, const float max_width,
@@ -382,8 +486,8 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   DrawLine(0, height - 60, width, height - 60, kWarmLine);
   draw_button({18.0F, footer_y + 9.0F, 94.0F, 42.0F}, paused ? "Resume" : "Pause", paused);
   draw_button({130.0F, footer_y + 9.0F, 58.0F, 42.0F}, "1x", speed == 1);
-  draw_button({194.0F, footer_y + 9.0F, 58.0F, 42.0F}, "2x", speed == 2);
-  draw_button({258.0F, footer_y + 9.0F, 58.0F, 42.0F}, "5x", speed == 5);
+  draw_button({194.0F, footer_y + 9.0F, 58.0F, 42.0F}, "5x", speed == 5);
+  draw_button({258.0F, footer_y + 9.0F, 58.0F, 42.0F}, "20x", speed == 20);
   draw_button({330.0F, footer_y + 9.0F, 78.0F, 42.0F}, "Save", false);
   draw_text("Generation 1", 430, height - 39, 18);
   if (!status_line_.empty() && width >= 1100) {
@@ -433,16 +537,16 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text(TextFormat("Forage %u   Dig %u   Nurse %u", view.tasks.workers_by_task[0],
                        view.tasks.workers_by_task[1], view.tasks.workers_by_task[2]),
             panel_x + 22, 317, 16);
-  draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, 344, 16, kMutedInk);
   draw_text(TextFormat("%llu new cells  |  %llu births",
                        static_cast<unsigned long long>(view.stats.cells_excavated),
                        static_cast<unsigned long long>(view.stats.workers_born)),
-            panel_x + 22, 367, 16, kMutedInk);
+            panel_x + 22, 338, 16, kMutedInk);
+  draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, 359, 16, kMutedInk);
 
   const std::array<const char*,4> focus_labels{{"Bal","Grow","Expand","Food"}};
   for(int index=0;index<4;++index) draw_button(focus_button_bounds(panel_x,index),focus_labels[static_cast<std::size_t>(index)],static_cast<int>(view.focus)==index);
-  DrawLine(panel_x + 20, 405, width - 20, 405, kWarmLine);
-  draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,410,16,kMutedInk);
+  DrawLine(panel_x + 20, 415, width - 20, 415, kWarmLine);
+  draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,419,16,kMutedInk);
   const std::array<const char*,4> upgrades{{"Mandibles","Nursery","Trails","Queen"}};
   for(int index=0;index<4;++index){
     const Rectangle card=upgrade_card_bounds(panel_x,panel_width,index);
@@ -453,7 +557,7 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
                             :TextFormat("F%d  %s  L%d  %lld",index+1,upgrades[static_cast<std::size_t>(index)],view.upgrade_levels[static_cast<std::size_t>(index)],static_cast<long long>(cost));
     draw_text(label,panel_x+28,static_cast<int>(card.y)+6,14,affordable?kInk:kMutedInk);
   }
-  draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,582,14,kMutedInk);
+  draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,576,14,kMutedInk);
   /* Selection stays available in the world; temporary M3 cards occupy the inspector detail area. */
 
   if (height >= 720) {
@@ -508,6 +612,9 @@ void Renderer::clear_requests() {
   save_requested_ = false;
   recover_requested_ = false;
   new_colony_requested_ = false;
+  flight_requested_ = false;
+  new_run_requested_ = false;
+  trait_requested_.reset();
 }
 
 } // namespace ant::presentation
