@@ -10,7 +10,7 @@ M4 completes the generation loop. A colony latches **maturity** at 100 living wo
 
 ## Active scope
 
-**In progress: T014a — reliable selection and modal input.** The code is written and covered by tests; the native interaction check that closes the slice is blocked. Shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector are implemented. Simulation and save formats are unchanged. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.
+**Next: T006a — persistent dig faces and connected corridors.** T014a is complete: shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector, with the native interaction confirmed by the project owner. Simulation and save formats were unchanged by it. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.
 
 Suggested prompt for a smaller model:
 
@@ -26,7 +26,7 @@ Suggested prompt for a smaller model:
 | M2 Living colony | Complete — T005–T007 |
 | M3 Safe incremental slice | Complete — T008–T010 |
 | M4 Complete generation loop | Complete — T011–T013 |
-| M5 Release candidate | In progress — T014 partial; T015 optimization partial, full performance gate open; T016 partial |
+| M5 Release candidate | In progress — T014a complete; T014b/c/d open; T015 optimization partial, full performance gate open; T016 partial |
 
 ## Environment observations
 
@@ -133,7 +133,7 @@ shipped build would have used rather than a source path the player does not have
 
 The `.app` bundle itself, version metadata and the release archive are still open.
 
-### T014a — reliable selection and modal input (implemented, native check outstanding)
+### T014a — reliable selection and modal input (complete)
 
 New `presentation/interaction.{hpp,cpp}` holds the rules with no raylib dependency, so they run in
 the headless build; `presentation/desktop_input.{hpp,cpp}` holds the GLFW-side event latching.
@@ -180,16 +180,22 @@ release gesture in both drag directions, selection across death and run change, 
 the scroll range, Escape/recovery scene ownership, modal and clipped input rejection, and a short
 native click that presses and releases in one poll.
 
-**Not verified — the native interaction check is blocked.** The window was opened at 1440x900 and
-photographed with `screencapture` (raylib's `TakeScreenshot` is not trustworthy on this display):
-the new footer, real generation number, status line, upgrade tooltip and the selected-ant region
-above the footer all render correctly. Clicking could not be completed. Automation could not deliver
-an activating click to the raylib window in the background, and the machine's screen then locked, at
-which point GLFW refuses to create a window at all (`Failed to find selected monitor`, `dpi=0x0`) and
-macOS blocks synthetic input. **No ant has been selected in the running app, no pan or modal capture
-has been exercised natively, and the 1024x640 window was not re-photographed.** T014a is not closable
-until that is done with real clicks at both sizes. The interaction rules are unit-tested; the seam
-between GLFW event latching and those rules is exactly what is still unproven.
+**Native review**, at 1440x900 on Retina, partly automated and completed by the project owner:
+
+- Clicking an ant selects it and the inspector names it; clicking empty ground clears the selection.
+- A drag that begins on an adaptation card and releases in the world neither selects nor buys: Work
+  and the card tier were unchanged, because a click completes only where it began.
+- A left drag in the world neither pans nor changes the selection; the camera keeps the keyboard
+  while the pointer rests over the inspector, which the first cut of this slice had broken.
+- The wheel zooms the world only when the pointer is over the world; over the panel it does not.
+- `L` opens the flight panel and Escape closes it; Escape from the colony opens the pause menu, and
+  never closes the window, so the raylib default exit key really is disabled. While a modal is open
+  the backdrop is inert — an adaptation card behind it does not buy — and the simulation is held,
+  resuming to its previous state when the modal closes.
+
+Automating this was slow and unreliable: the tooling could not deliver clicks to the window in the
+background and swallowed Escape in the foreground. Interactive checks belong to the owner; keep
+automated verification to the headless suite.
 
 ### Interface interaction layer (T014, partial)
 
@@ -234,12 +240,9 @@ Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. 
 
 ## Open work
 
-Finish T014a's native check first: open the app at 1440x900 and 1024x640 with the screen unlocked
-and confirm with real clicks that an ant can be selected while it moves, that a drag beginning on a
-card does not select, that right/middle drag pans while left click does not, that Escape opens and
-closes the pause menu, and that a click on the panel does not reach the world. Then continue with
-the ordered M5 slices. The audit in NEXT_STEPS supersedes the old next-task order. Historical visual
-reviews below do not establish that current input routing works.
+Continue with the ordered M5 slices, starting at T006a. The audit in NEXT_STEPS supersedes the old
+next-task order. Two T014a details were reviewed only by reasoning and unit tests, not natively:
+pointer panning with the right or middle button, and the 1024x640 panel scroll.
 
 - **The surface view was not re-photographed after the final art pass.** The window server stopped accepting new windows partway through review (`GLFW: Failed to determine Monitor to center Window`), so the last captures are of the nursery at zoom 11, which does show the reworked ants, brood, queen and terrain. The surface, food sources and foraging column at mid zoom were reviewed before the final colour and limb-tone tweaks but not after them.
 - **Keyboard activation was not exercised interactively.** The flight, trait and found-colony key handlers were verified through unit tests against a real `SaveService` and their panels were rendered and photographed, but this session had no way to send key presses to the raylib window. The same limitation applies to the recovery prompt's `R`/`N` keys from M3.
