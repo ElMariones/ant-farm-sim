@@ -45,3 +45,27 @@ When changing an accepted decision, append a dated entry with the previous rule,
 The user requested a commit/work audit and a guide for natural tunnels, varied movement, subtle within-species appearance, working selection and better UI flow. Previously T014 was a broad UI task followed by hardening. The new order in [NEXT_STEPS](NEXT_STEPS.md) starts with T014a input correctness, splits renewed excavation/navigation acceptance into T006a/b and T003a/b, re-baselines T013a, then closes T014 and the remaining T015/T016 gates. M0–M4 historical delivery is retained; T015 is explicitly partial.
 
 The direction remains a 2D cross-section, one species and fixed 20 Hz simulation. Cosmetic variation is presentation-only; routes and active digging state are deterministic and require complete snapshot/migration treatment. No new biology systems, 3D engine or automatic terrain carving are authorized by this revision. New numeric geometry/appearance ranges are initial tuning proposals, not completed or measured behavior.
+
+## D022 — Excavation plans faces, and the envelope reaches the clay (2026-09-07)
+
+Previously excavation ranked every diggable cell touching nest air, kept the best eight by distance
+to home, and let any worker claim the first free one. That policy expanded a single cavity around
+the nursery: it had no memory of direction, so seeded noise scattered pits instead of bending a
+passage, and no cell was ever part of a corridor. The envelope was Manhattan distance 64 from home
+at y=58, which put the clay layer at y=138 permanently out of reach, so the hardness rules could
+never apply.
+
+Excavation now plans at most four persistent dig faces, each holding a heading for several cells and
+carving a three-wide cross-section, branching after a minimum length and widening into a chamber
+only when the colony is short of space. The envelope is Manhattan distance 96, which reaches the
+clay. Faces steer future digging, so they are serialized with the run and included in the canonical
+hash; a save written before faces existed simply carries none and the plan reseeds from the grid.
+
+Affected: `docs/engineering/SIMULATION.md` excavation and reservation contracts, `WorldSnapshot`,
+the profile codec, and the balance baseline. Measured consequence: flight moves from 30.3–30.9 to
+31.7–31.9 minutes on seeds 1/7/42 under buy-cheapest, first purchase stays at 2.8–2.9 minutes, and
+no seed goes extinct. Capacity rules are deliberately unchanged so the geometry change is isolated;
+separating useful chamber space from transit corridors remains T006b.
+
+Spoil overflow is now counted rather than folded into deliveries, so excavated grains, the visible
+mound and off-view overflow reconcile.

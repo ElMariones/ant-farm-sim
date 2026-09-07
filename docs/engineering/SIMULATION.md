@@ -47,7 +47,7 @@ Home routes use a multi-source BFS distance field from valid nursery/storage ent
 
 Budget: at most 16 new A* requests/tick, at most 4,096 expanded cells/request. Deferred actors wait/explore locally; they never teleport. A path search that exhausts the budget is pending or retryable, not proof the target is unreachable. Permanently unreachable candidates are retried only after cooldown/topology revision.
 
-Reservations bind one entity to a quantity/target and expiry tick. Food availability subtracts reservations. Dig frontiers allow 2 workers per target cell. On death, invalidation, or timeout release reservations and retain any actual cargo. Actor search has a 10-second retry cooldown after a failed target; carried cargo takes priority over a new task.
+Reservations bind one entity to a quantity/target and expiry tick. Food availability subtracts reservations. Dig faces allow 2 workers each. On death, invalidation, or timeout release reservations and retain any actual cargo. Actor search has a 10-second retry cooldown after a failed target; carried cargo takes priority over a new task.
 
 Topology changes bump a navigation revision. Before entering the next cell, check passability even if a cached route exists. Source exhaustion invalidates its reservation and sets a 5-second local avoidance memory. Ants find returning routes using the home field; trail following is a discovery bias, never the sole means of returning home.
 
@@ -79,9 +79,13 @@ No nest/food omniscience via pheromones; no smart deletion of failed trails. Sta
 
 ## Excavation
 
-Queen/nursery anchor and colony space demand determine whether excavation work is useful. Candidate cells must be diggable and adjacent to connected nest air. Score candidates by continuing an existing segment, staying near the nursery for chamber growth, and short distance to a spoil outlet. Seeded tie-breaking prevents perfect symmetry. Limit active candidate cells to 8; this is a performance bound, not an upgrade unlock.
+Queen/nursery anchor and colony space demand determine whether excavation work is useful. Excavation is planned as at most four **persistent dig faces**, not a ranked heap of loose cells. A face is an anchor in connected nest air, a cardinal heading, the branch length driven so far, and whether it is widening a chamber. It plans the corridor cross-section one step along its heading — three cells wide, measured across the heading — and only cells that are diggable and inside the envelope, so a root or the envelope edge narrows a corridor rather than stalling it.
 
-Each cell has remaining dig work (soil 10, clay 25 units). Base worker delivers 2 work units/sec. On final hit, clear cell, bump topology/chunk revisions, and put one spoil unit in the final digger's cargo. It must deliver to surface before digging again. Other diggers release that cell and retarget. A spoil deposit changes a visual mound counter, not navigable terrain in v0.1.
+A face advances only once its centreline cell is genuinely open, then keeps its heading for four cells before seeded noise may turn it a quarter turn, which produces bends and cardinal stair steps rather than scattered pits. It never turns toward the surface. A face branches into a free slot once it has driven `kMinBranchLength` cells, taking a perpendicular heading, and retires at `kMaxBranchLength` or after `kBlockedLimit` ticks without progress; an idle slot reseeds from connected air that touches diggable ground, preferring starts far from home and from the other faces. When the colony is short of space a branch end becomes a chamber and widens into a rounded blob instead of driving on. At most two workers commit to a face, and they take different cells of the cross-section so they widen it together.
+
+The excavation envelope is `y > 34` and Manhattan distance from home under 96, which reaches the clay layer; the previous radius of 64 did not. Seeded tie-breaking prevents perfect symmetry. Faces steer future digging, so they are serialized with the run rather than rederived, and they contribute to the canonical hash.
+
+Each cell has remaining dig work (soil 10, clay 25 units). Base worker delivers 2 work units/sec. On final hit, clear cell, bump topology/chunk revisions, and put one spoil unit in the final digger's cargo. It must deliver to surface before digging again. Other diggers release that cell and retarget. Spoil is tipped onto a bounded surface apron; once that apron is full the grain is recorded as **overflow** tipped out of view, so `spoil_delivered == mound + overflow` always holds and a full apron never traps the excavator carrying the grain.
 
 Each newly connected excavated cell contributes to nursery capacity: `max(12, floor(reachable_nest_air / 4))`. Initial connected nest area is at least 64 cells (capacity >=16). Capacity limits all live brood together, not adult workers. If capacity drops in a debug edit, existing brood survive but laying pauses.
 
@@ -138,7 +142,7 @@ Because this turns sky into soil, it is the first thing in the simulation that m
 saved path may legitimately cross solid ground; snapshot validation therefore only requires paths
 still marked current to be walkable.
 
-## Frontier claims are counted once per tick (M5)
+## Dig-face claims are counted once per tick (M5)
 
 Each excavator used to rescan every worker for every frontier to see how many were already
 committed, which made the tick cost quadratic in population and timed the sixty-minute soak out in
@@ -167,4 +171,4 @@ stuck this way, and because they moved every tick they counted as productive whi
 
 ## Accepted colony behavior revision (2026-09-07; not yet implemented)
 
-See [NEXT_STEPS](../planning/NEXT_STEPS.md) for T006a/b and T003a/b: persistent bounded dig faces forming connected corridors and chambers; deterministic per-ant route variation; collision-safe diagonal fixed-point travel; and separate useful-space accounting. The current code still uses home-biased frontiers, four-neighbor routing and X-first travel. Implement snapshot/migration and balance checks together with those changes; the guide does not silently change existing saves.
+See [NEXT_STEPS](../planning/NEXT_STEPS.md) for T006b and T003a/b: deterministic per-ant route variation; collision-safe diagonal fixed-point travel; and separate useful-space accounting. T006a is delivered — excavation now plans persistent dig faces as described above — but routing is still four-neighbor and travel is still X-first, and every connected air cell still counts toward capacity. Implement snapshot/migration and balance checks together with those changes; the guide does not silently change existing saves.

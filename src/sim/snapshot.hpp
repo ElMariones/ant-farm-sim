@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sim/components.hpp"
+#include "sim/dig_plan.hpp"
 #include "sim/grid.hpp"
 #include "sim/world.hpp"
 
@@ -41,7 +42,8 @@ struct WorldSnapshot {
   std::vector<std::uint16_t> trails;
   std::vector<std::uint16_t> dig_work;
   TaskDiagnostics task_diagnostics{};
-  std::vector<GridPos> frontiers;
+  // Active excavation faces. A face steers future digging, so it is saved rather than rederived.
+  std::vector<DigFace> dig_faces;
   std::vector<BroodSnapshot> brood;
   std::vector<CorpseSnapshot> corpses;
   std::vector<DroppedCargoSnapshot> dropped_food;
@@ -59,8 +61,8 @@ struct WorldSnapshot {
   std::array<std::uint8_t, 4> adaptation_levels{};
   TraitModifiers traits{};
   bool mature{};
-  // Whether the cached frontier set was current for the live topology, for the same reason paths
-  // record their validity rather than a raw revision counter.
+  // Whether the cached connectivity survey was current for the live topology, for the same reason
+  // paths record their validity rather than a raw revision counter.
   bool frontiers_valid{true};
   std::uint64_t egg_assignment_counter{};
 };

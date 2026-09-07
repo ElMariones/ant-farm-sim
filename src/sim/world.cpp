@@ -42,7 +42,7 @@ World::World(const std::uint64_t seed, const TraitModifiers traits)
   sources_[0] = {next_id_++, generated.source_positions[0], Nutrient::Carbohydrate, 100'000, 100'000, 0, 800, 20, 20};
   sources_[1] = {next_id_++, generated.source_positions[1], Nutrient::Protein, 100'000, 100'000, 0, 400, 20, 20};
   traits_ = traits;
-  refresh_home_field(); spawn_queen(); spawn_workers(); recompute_needs_and_frontiers();
+  refresh_home_field(); spawn_queen(); spawn_workers(); recompute_needs_and_dig_plan();
   starting_nest_air_ = connected_nest_air_;
 }
 
@@ -52,7 +52,7 @@ World::World(const WorldSnapshot& snapshot)
       stats_(snapshot.stats),
       behavior_rng_(Pcg32::restore(snapshot.behavior_rng_state, snapshot.behavior_rng_increment)),
       lifecycle_rng_(Pcg32::restore(snapshot.lifecycle_rng_state, snapshot.lifecycle_rng_increment)),
-      task_diagnostics_(snapshot.task_diagnostics), frontiers_(snapshot.frontiers),
+      task_diagnostics_(snapshot.task_diagnostics),
       dig_work_(snapshot.dig_work), brood_(snapshot.brood), corpses_(snapshot.corpses),
       dropped_food_(snapshot.dropped_food), connected_nest_air_(snapshot.connected_nest_air),
       starting_nest_air_(snapshot.starting_nest_air), nursery_capacity_(snapshot.nursery_capacity),
@@ -90,6 +90,7 @@ World::World(const WorldSnapshot& snapshot)
     }
     ordered_entities_.push_back(entity);
   }
+  dig_plan_.restore(snapshot.dig_faces);
   frontier_revision_ = snapshot.frontiers_valid ? grid_.navigation_revision() : 0;
   for (const ActorState& actor : snapshot.actors) {
     if (actor.cargo.kind == CargoKind::Food && actor.cargo.amount > 0) {
@@ -141,9 +142,9 @@ void World::refresh_home_field() { if (home_field_.revision() != grid_.navigatio
 void World::step() {
   refill_sources(); refresh_home_field();
   for (const entt::entity e : ordered_entities_) { Position& p = registry_.get<Position>(e); p.previous_x_subcells = p.x_subcells; p.previous_y_subcells = p.y_subcells; }
-  if (tick_ % kTicksPerSecond == 0) recompute_needs_and_frontiers();
+  if (tick_ % kTicksPerSecond == 0) recompute_needs_and_dig_plan();
   task_diagnostics_.workers_by_task.fill(0);
-  refresh_frontier_claims();
+  refresh_dig_claims();
   int path_budget = 16; for (const entt::entity e : ordered_entities_) if (registry_.all_of<WorkerMind>(e)) process_worker(e, path_budget);
   if ((tick_ + 1) % kTicksPerSecond == 0) update_biology();
   if ((tick_ + 1) % 4 == 0) update_trails();
@@ -151,23 +152,22 @@ void World::step() {
 }
 void World::run_ticks(const Tick count) { for (Tick i = 0; i < count; ++i) step(); }
 
-void World::recompute_needs_and_frontiers() {
+void World::recompute_needs_and_dig_plan() {
   if (frontier_revision_ != grid_.navigation_revision()) {
     frontier_revision_ = grid_.navigation_revision();
     std::vector<std::uint8_t> visited(static_cast<std::size_t>(Grid::kWidth * Grid::kHeight)); std::queue<GridPos> queue;
-    queue.push(home_); visited[grid_index(home_)] = 1; connected_nest_air_ = 0; frontiers_.clear();
+    queue.push(home_); visited[grid_index(home_)] = 1; connected_nest_air_ = 0; dig_candidates_.clear();
     while (!queue.empty()) {
       const GridPos p = queue.front(); queue.pop(); if (grid_.at(p) != Material::Air) continue; ++connected_nest_air_;
+      bool touches_ground = false;
       for (const GridPos d : kNeighbors) { const GridPos n{p.x + d.x, p.y + d.y}; if (!grid_.in_bounds(n)) continue;
         if (grid_.at(n) == Material::Air && visited[grid_index(n)] == 0) { visited[grid_index(n)] = 1; queue.push(n); }
-        else if (is_diggable(grid_.at(n)) && n.y > 32 && std::abs(n.x - home_.x) + std::abs(n.y - home_.y) < 64) frontiers_.push_back(n);
+        else if (is_diggable(grid_.at(n)) && within_envelope(n, home_)) touches_ground = true;
       }
+      // A face starts from open ground it can stand in, not from the wall itself, so its heading
+      // has somewhere to come from.
+      if (touches_ground && within_envelope(p, home_)) dig_candidates_.push_back(p);
     }
-    std::sort(frontiers_.begin(), frontiers_.end(), [this](const GridPos a, const GridPos b) {
-      const auto score = [this](const GridPos p) { return (std::abs(p.y - home_.y) <= 9 ? 0 : 20) + std::abs(p.x - home_.x) + 2 * std::abs(p.y - home_.y) + static_cast<int>(mix_seed(seed_ ^ grid_index(p)) % 7ULL); };
-      return score(a) != score(b) ? score(a) < score(b) : a < b;
-    });
-    frontiers_.erase(std::unique(frontiers_.begin(), frontiers_.end()), frontiers_.end()); if (frontiers_.size() > 8) frontiers_.resize(8);
     nursery_capacity_ = std::max(12, connected_nest_air_ / 4);
     if (starting_nest_air_ > 0) {
       const std::int64_t additional = std::max(0, connected_nest_air_ - starting_nest_air_);
@@ -175,9 +175,12 @@ void World::recompute_needs_and_frontiers() {
       stores_.protein_capacity = std::min<std::int64_t>(20'000'000, 100'000 + 1'000 * additional);
     }
   }
+  const bool wants_chamber = brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ||
+                             stores_.carbohydrate * 4 >= stores_.carbohydrate_capacity * 3;
+  dig_plan_.update(grid_, home_, seed_, dig_candidates_, wants_chamber);
   const auto shortage = [](const std::int64_t amount, const std::int64_t target) { return amount >= target ? std::uint16_t{0} : static_cast<std::uint16_t>(((target - amount) * 1'000) / target); };
   task_diagnostics_.stimuli[0] = std::max(shortage(stores_.carbohydrate, stores_.carbohydrate_capacity / 2), shortage(stores_.protein, stores_.protein_capacity / 2));
-  task_diagnostics_.stimuli[1] = frontiers_.empty() ? 0 : static_cast<std::uint16_t>(brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ? 850 : 380);
+  task_diagnostics_.stimuli[1] = dig_plan_.idle() ? 0 : static_cast<std::uint16_t>(brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ? 850 : 380);
   const std::size_t uncared = static_cast<std::size_t>(std::count_if(brood_.begin(), brood_.end(), [](const BroodSnapshot& b) { return b.care_remaining == 0; }));
   task_diagnostics_.stimuli[2] = brood_.empty() ? 0 : static_cast<std::uint16_t>((uncared * 1'000U) / brood_.size());
   const std::size_t cleanable = static_cast<std::size_t>(std::count_if(corpses_.begin(), corpses_.end(), [](const CorpseSnapshot& c) { return c.cleanable; }));
@@ -195,7 +198,7 @@ void World::choose_task(const entt::entity e) {
                                    [](const CorpseSnapshot& c) { return c.cleanable; });
     std::array<TaskWeight, 5> weights{{
       {Task::Forage, food ? response_weight(task_diagnostics_.stimuli[0], mind.thresholds[0]) : 0},
-      {Task::Excavate, frontiers_.empty() ? 0 : response_weight(task_diagnostics_.stimuli[1], mind.thresholds[1])},
+      {Task::Excavate, dig_plan_.idle() ? 0 : response_weight(task_diagnostics_.stimuli[1], mind.thresholds[1])},
       {Task::Nurse, brood_.empty() ? 0 : response_weight(task_diagnostics_.stimuli[2], mind.thresholds[2])},
       {Task::Clean, clean ? response_weight(task_diagnostics_.stimuli[3], mind.thresholds[3]) : 0}, {Task::Idle, 1'000}}};
     for (TaskWeight& weight : weights) {
@@ -207,8 +210,8 @@ void World::choose_task(const entt::entity e) {
     }
     mind.task = choose_weighted_task(weights, behavior_rng_);
   }
-  // Switching task also gives up any frontier this worker was committed to.
-  release_frontier_claim(mind);
+  // Switching task also gives up any dig face this worker was committed to.
+  release_dig_claim(mind);
   mind.committed_until = tick_ + 5 * kTicksPerSecond; mind.has_target = false; mind.action_ticks = 0;
 }
 
@@ -220,7 +223,7 @@ void World::process_worker(const entt::entity e, int& path_budget) {
     ++task_diagnostics_.workers_by_task[static_cast<std::size_t>(Task::Forage)];
     return;
   }
-  if (((tick_ + registry_.get<Identity>(e).id) % 10 == 0 && tick_ >= mind.committed_until) || (mind.task == Task::Excavate && frontiers_.empty()) || (mind.task == Task::Nurse && brood_.empty())) choose_task(e);
+  if (((tick_ + registry_.get<Identity>(e).id) % 10 == 0 && tick_ >= mind.committed_until) || (mind.task == Task::Excavate && dig_plan_.idle()) || (mind.task == Task::Nurse && brood_.empty())) choose_task(e);
   ++task_diagnostics_.workers_by_task[static_cast<std::size_t>(mind.task)];
   if (cargo.kind == CargoKind::Spoil || cargo.kind == CargoKind::Corpse) { deliver_non_food(e); return; }
   if (mind.task != Task::Forage) { Forager& f = registry_.get<Forager>(e); if (f.reserved_amount > 0) release_reservation(f); f.state = ForageState::AtHome; }
@@ -337,15 +340,12 @@ void World::route_to(const entt::entity e, const GridPos target, int& path_budge
 void World::process_excavator(const entt::entity e, int& path_budget) {
   WorkerMind& mind = registry_.get<WorkerMind>(e);
   if (!mind.has_target || !grid_.in_bounds(mind.target) || !is_diggable(grid_.at(mind.target))) {
-    // Give up the old claim before taking a new one, or this worker is counted on two frontiers.
-    release_frontier_claim(mind);
+    // Give up the old claim before taking a new one, or this worker is counted on two faces.
+    release_dig_claim(mind);
     mind.has_target = false;
-    for (std::size_t index = 0; index < frontiers_.size(); ++index) {
-      if (frontier_claims_[index] >= 2) continue;
-      ++frontier_claims_[index];
-      mind.target = frontiers_[index];
+    if (const auto claimed = dig_plan_.claim(grid_, home_)) {
+      mind.target = claimed->cell;
       mind.has_target = true;
-      break;
     }
   }
   if (!mind.has_target) return; const GridPos current = registry_.get<Position>(e).cell(); GridPos work = current; bool adjacent = false;
@@ -354,7 +354,7 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
   const std::uint16_t dig_amount = static_cast<std::uint16_t>(
       (100 + 25 * adaptation_levels_[0]) * (traits_.industry_tier >= 1 ? 115 : 100) / 100);
   ++stats_.productive_worker_ticks;
-  if (remaining <= dig_amount) { remaining = 0; grid_.set(mind.target, Material::Air); Cargo& cargo = registry_.get<Cargo>(e); cargo.kind = CargoKind::Spoil; cargo.amount = 1'000; ++stats_.cells_excavated; release_frontier_claim(mind); mind.has_target = false; }
+  if (remaining <= dig_amount) { remaining = 0; grid_.set(mind.target, Material::Air); Cargo& cargo = registry_.get<Cargo>(e); cargo.kind = CargoKind::Spoil; cargo.amount = 1'000; ++stats_.cells_excavated; release_dig_claim(mind); mind.has_target = false; }
   else remaining = static_cast<std::uint16_t>(remaining - dig_amount);
 }
 
@@ -391,7 +391,10 @@ void World::process_cleaner(const entt::entity e, int& path_budget) {
 void World::deliver_non_food(const entt::entity e) {
   Cargo& cargo = registry_.get<Cargo>(e); Movement& m = registry_.get<Movement>(e); const GridPos outlet{home_.x, 31};
   if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), outlet); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
-  if (cargo.kind == CargoKind::Spoil) { if (deposit_spoil()) ++spoil_mound_; ++stats_.spoil_delivered; } else if (cargo.kind == CargoKind::Corpse) ++stats_.corpses_cleaned; cargo = Cargo{}; clear_path(m);
+  // The apron is deliberately bounded, so a full one does not trap the excavator holding the grain.
+  // The haul still counts as work done; the grain is recorded as overflow tipped out of view rather
+  // than silently counted as mound, which is the only way the two stay reconcilable.
+  if (cargo.kind == CargoKind::Spoil) { if (deposit_spoil()) ++spoil_mound_; else ++stats_.spoil_overflow; ++stats_.spoil_delivered; } else if (cargo.kind == CargoKind::Corpse) ++stats_.corpses_cleaned; cargo = Cargo{}; clear_path(m);
 }
 
 bool World::consume(const Nutrient nutrient, const std::int64_t amount) { std::int64_t& store = store_for(nutrient); if (store < amount) return false; store -= amount; if (nutrient == Nutrient::Carbohydrate) stats_.consumed_carbohydrate += amount; else stats_.consumed_protein += amount; return true; }
@@ -497,25 +500,18 @@ bool World::deposit_spoil() {
   return true;
 }
 
-void World::release_frontier_claim(const WorkerMind& mind) {
+void World::release_dig_claim(const WorkerMind& mind) {
   if (!mind.has_target) return;
-  for (std::size_t index = 0; index < frontiers_.size(); ++index) {
-    if (frontiers_[index] == mind.target) {
-      if (frontier_claims_[index] > 0) --frontier_claims_[index];
-      return;
-    }
-  }
+  if (const auto face = dig_plan_.face_of(grid_, mind.target, home_)) dig_plan_.release(*face);
 }
 
-void World::refresh_frontier_claims() {
-  frontier_claims_.fill(0);
+void World::refresh_dig_claims() {
+  dig_plan_.clear_claims();
   for (const entt::entity entity : ordered_entities_) {
     if (!registry_.all_of<WorkerMind>(entity)) continue;
     const WorkerMind& mind = registry_.get<WorkerMind>(entity);
     if (mind.task != Task::Excavate || !mind.has_target) continue;
-    for (std::size_t index = 0; index < frontiers_.size(); ++index) {
-      if (frontiers_[index] == mind.target) { ++frontier_claims_[index]; break; }
-    }
+    if (const auto face = dig_plan_.face_of(grid_, mind.target, home_)) dig_plan_.note_claim(*face);
   }
 }
 
@@ -567,7 +563,7 @@ WorldSnapshot World::snapshot() const {
   out.behavior_rng_state = behavior_rng_.state(); out.behavior_rng_increment = behavior_rng_.increment();
   out.lifecycle_rng_state = lifecycle_rng_.state(); out.lifecycle_rng_increment = lifecycle_rng_.increment();
   out.trails = trails_.cells(); out.dig_work = dig_work_; out.task_diagnostics = task_diagnostics_;
-  out.frontiers = frontiers_; out.brood = brood_; out.corpses = corpses_; out.dropped_food = dropped_food_;
+  out.dig_faces = dig_plan_.save(); out.brood = brood_; out.corpses = corpses_; out.dropped_food = dropped_food_;
   out.spoil_mound = spoil_mound_; out.starting_nest_air = starting_nest_air_;
   out.connected_nest_air = connected_nest_air_; out.nursery_capacity = nursery_capacity_;
   out.next_laying = next_laying_; out.queen_starvation = queen_starvation_;
@@ -593,7 +589,9 @@ std::uint64_t World::canonical_hash() const {
   for (const FoodSource& source : sources_) { hash_signed(hash, source.amount); hash_signed(hash, source.reserved); hash_value(hash, source.next_refill); }
   for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); hash_value(hash, id.id); hash_value(hash, static_cast<std::uint64_t>(p.x_subcells)); hash_value(hash, static_cast<std::uint64_t>(p.y_subcells)); hash_signed(hash, cargo.amount); if (registry_.all_of<WorkerMind>(e)) { const WorkerMind& mind = registry_.get<WorkerMind>(e); hash_value(hash, static_cast<std::uint64_t>(mind.task)); hash_value(hash, mind.committed_until); } if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); hash_value(hash, life.age); hash_value(hash, life.lifespan); hash_value(hash, life.starvation); } }
   for (const BroodSnapshot& b : brood_) { hash_value(hash, b.id); hash_value(hash, static_cast<std::uint64_t>(b.stage)); hash_value(hash, static_cast<std::uint64_t>(b.role)); hash_value(hash, b.progress); hash_value(hash, b.starvation); } for (const CorpseSnapshot& c : corpses_) { hash_value(hash, c.id); hash_value(hash, c.age); } for (const DroppedCargoSnapshot& dropped : dropped_food_) { hash_value(hash, dropped.id); hash_signed(hash, dropped.amount); hash_value(hash, dropped.age); }
-  hash_signed(hash, stats_.delivered); hash_value(hash, stats_.cells_excavated); hash_value(hash, stats_.workers_born); hash_value(hash, stats_.deaths); hash_value(hash, stats_.productive_worker_ticks); hash_value(hash, stats_.gynes_born); for (const auto level : adaptation_levels_) hash_value(hash, level); hash_value(hash, traits_.vigor_tier); hash_value(hash, traits_.industry_tier); hash_value(hash, mature_); hash_value(hash, egg_assignment_counter_); return hash;
+  hash_signed(hash, stats_.delivered); hash_value(hash, stats_.cells_excavated); hash_value(hash, stats_.workers_born); hash_value(hash, stats_.deaths); hash_value(hash, stats_.productive_worker_ticks); hash_value(hash, stats_.gynes_born); for (const auto level : adaptation_levels_) hash_value(hash, level); hash_value(hash, traits_.vigor_tier); hash_value(hash, traits_.industry_tier); hash_value(hash, mature_); hash_value(hash, egg_assignment_counter_);
+  for (const DigFace& face : dig_plan_.faces()) { hash_value(hash, face.active); if (!face.active) continue; hash_signed(hash, face.anchor.x); hash_signed(hash, face.anchor.y); hash_signed(hash, face.heading.x); hash_signed(hash, face.heading.y); hash_value(hash, face.length); hash_value(hash, face.chamber); }
+  return hash;
 }
 
 bool World::invariant_holds() const {

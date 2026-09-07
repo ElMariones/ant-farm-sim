@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sim/components.hpp"
+#include "sim/dig_plan.hpp"
 #include "sim/grid.hpp"
 #include "sim/navigation.hpp"
 #include "sim/pheromones.hpp"
@@ -44,6 +45,9 @@ struct WorldStats {
   std::uint64_t completed_round_trips{};
   std::uint64_t cells_excavated{};
   std::uint64_t spoil_delivered{};
+  // Grains hauled out after the apron was already full. Counted rather than dropped so excavated
+  // cells, delivered grains and the visible mound still add up.
+  std::uint64_t spoil_overflow{};
   std::uint64_t eggs_laid{};
   std::uint64_t workers_born{};
   std::uint64_t deaths{};
@@ -182,7 +186,7 @@ private:
   [[nodiscard]] std::int64_t& store_for(Nutrient nutrient);
   [[nodiscard]] std::int64_t store_for(Nutrient nutrient) const;
   [[nodiscard]] std::int64_t capacity_for(Nutrient nutrient) const;
-  void recompute_needs_and_frontiers();
+  void recompute_needs_and_dig_plan();
   void choose_task(entt::entity entity);
   void process_worker(entt::entity entity, int& path_budget);
   void process_excavator(entt::entity entity, int& path_budget);
@@ -202,8 +206,8 @@ private:
   bool deposit_spoil();
   [[nodiscard]] bool cell_is_occupied(GridPos cell) const;
   void update_maturity();
-  void refresh_frontier_claims();
-  void release_frontier_claim(const WorkerMind& mind);
+  void refresh_dig_claims();
+  void release_dig_claim(const WorkerMind& mind);
 
   std::uint64_t seed_{};
   Tick tick_{};
@@ -218,10 +222,13 @@ private:
   Pcg32 lifecycle_rng_;
   TrailField trails_;
   TaskDiagnostics task_diagnostics_{};
-  std::vector<GridPos> frontiers_;
-  // How many excavators are already committed to each frontier, refreshed once per tick. Counting
-  // this per excavator meant rescanning every worker and made the tick cost quadratic.
-  std::array<int, 8> frontier_claims_{};
+  // A few persistent dig faces rather than a ranked heap of loose cells, so excavation reads as
+  // corridors and chambers. Worker commitments are retallied once per tick: counting them per
+  // excavator meant rescanning every worker and made the tick cost quadratic.
+  DigPlan dig_plan_;
+  // Connected Air cells that touch diggable ground, collected by the same BFS that measures nest
+  // air, and used to seed an idle face.
+  std::vector<GridPos> dig_candidates_;
   std::uint64_t frontier_revision_{};
   std::vector<std::uint16_t> dig_work_;
   std::vector<BroodSnapshot> brood_;

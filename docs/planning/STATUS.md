@@ -10,7 +10,7 @@ M4 completes the generation loop. A colony latches **maturity** at 100 living wo
 
 ## Active scope
 
-**Next: T006a — persistent dig faces and connected corridors.** T014a is complete: shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector, with the native interaction confirmed by the project owner. Simulation and save formats were unchanged by it. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.
+**Next: T003a — deterministic per-ant route variation.** T006a is complete: excavation plans persistent dig faces that drive three-wide corridors, branch, stair-step around obstacles and widen into chambers on demand, and spoil overflow is accounted for explicitly. T014a is complete: shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector, with the native interaction confirmed by the project owner. Simulation and save formats were unchanged by it. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.
 
 Suggested prompt for a smaller model:
 
@@ -26,7 +26,7 @@ Suggested prompt for a smaller model:
 | M2 Living colony | Complete — T005–T007 |
 | M3 Safe incremental slice | Complete — T008–T010 |
 | M4 Complete generation loop | Complete — T011–T013 |
-| M5 Release candidate | In progress — T014a complete; T014b/c/d open; T015 optimization partial, full performance gate open; T016 partial |
+| M5 Release candidate | In progress — T014a and T006a complete; T014b/c/d open; T015 optimization partial, full performance gate open; T016 partial |
 
 ## Environment observations
 
@@ -132,6 +132,56 @@ unit tests using a fake filesystem predicate, and a missing file now reports the
 shipped build would have used rather than a source path the player does not have.
 
 The `.app` bundle itself, version metadata and the release archive are still open.
+
+### T006a — persistent dig faces and connected corridors (complete)
+
+Excavation used to rank every diggable cell touching nest air and keep the best eight by distance to
+home. That has no memory of direction, so the colony widened one cavity around the nursery and the
+seeded noise scattered pits rather than bending a passage. `sim/dig_plan.{hpp,cpp}` replaces it with
+at most four persistent faces; the rules are plain data and pure functions, so they are covered in
+the headless build without a World.
+
+- A face is an anchor in connected air, a cardinal heading, its branch length and a chamber flag. It
+  plans the **three-wide cross-section** one step along its heading, and only cells that are
+  diggable and inside the envelope, so a root or the envelope edge narrows the corridor instead of
+  stalling the face.
+- It **advances only once its centreline is open**, holds its heading for four cells, then may take
+  a quarter turn from seeded noise — which is what produces bends and cardinal stair steps. It never
+  turns toward the surface.
+- It **branches** into a free slot after 14 cells with a perpendicular heading, and **retires** at 44
+  cells or after 240 ticks without progress. An idle slot reseeds from connected air touching
+  diggable ground, preferring starts far from home and from the other faces.
+- A branch end **becomes a chamber** and widens into a rounded blob only when brood or stores are
+  near capacity.
+- Two workers may commit to a face and take **different cells of the cross-section**, so they widen
+  it together rather than queueing on one grain.
+- The envelope grew from Manhattan 64 to 96, which finally **reaches the clay layer** at y=138; the
+  hardness rules could never apply before.
+
+**Spoil overflow is explicit (A12).** The apron is bounded, so a full one used to leave the grain
+counted as delivered while the mound did not grow. Overflow is now its own counter, and
+`spoil_delivered == mound + overflow` is asserted.
+
+Capacity rules are deliberately untouched so this change isolates geometry; separating useful
+chamber space from transit corridors is T006b.
+
+**Verified.** `ctest --preset headless` passes **133/133 in 64.06 s**, including the sixty-minute
+soak, which itself dropped from 134 s. Eleven new dig cases cover the envelope, cross-section
+geometry, refusal to plan bedrock/root or surface cells, the rounded chamber, the per-face worker cap
+and cell spread, advancing only on an open centreline, bounded recovery of a walled-in face,
+deterministic seeding and separation, save/restore, and two colony-level invariants: only diggable
+ground is ever removed and no excavated cell is left isolated.
+
+`--verify-round-trip` passes at 40,000 ticks on seeds 1/7/42/101/2026 with faces in the snapshot and
+in the canonical hash. Geometry measured from the console at seeds 1/7/42: mean open run per row
+falls from about 14 cells to 6–8 as digging proceeds, no isolated cell appears at any point, and at
+30 and 60 minutes the maps show several three-wide corridors, stair-stepped diagonals and horizontal
+connectors rather than one cavity.
+
+**Balance held** under buy-cheapest at 72,000 ticks: flight at 31.7–31.9 minutes against the 30–45
+minute target (30.3–30.9 before), first purchase at 2.8–2.9 minutes inside the 2–4 minute target,
+peak workers 172–179, no extinction, starvation or decline on seeds 1/7/42. The full five-seed
+two-policy re-baseline is still T013a's job.
 
 ### T014a — reliable selection and modal input (complete)
 
@@ -240,7 +290,7 @@ Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. 
 
 ## Open work
 
-Continue with the ordered M5 slices, starting at T006a. The audit in NEXT_STEPS supersedes the old
+Continue with the ordered M5 slices, starting at T003a. The audit in NEXT_STEPS supersedes the old
 next-task order. Two T014a details were reviewed only by reasoning and unit tests, not natively:
 pointer panning with the right or middle button, and the 1024x640 panel scroll.
 

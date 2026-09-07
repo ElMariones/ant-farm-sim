@@ -33,6 +33,7 @@ function(ant_configure_target target)
 endfunction()
 
 add_library(ant_sim
+  src/sim/dig_plan.cpp
   src/sim/grid.cpp
   src/sim/navigation.cpp
   src/sim/pheromones.cpp
@@ -124,6 +125,7 @@ if(BUILD_TESTING)
     src/presentation/ui_state.cpp
     src/presentation/interaction.cpp
     tests/unit/asset_paths_tests.cpp
+    tests/unit/dig_plan_tests.cpp
     tests/unit/grid_tests.cpp
     tests/unit/maturity_tests.cpp
     tests/unit/policy_tests.cpp

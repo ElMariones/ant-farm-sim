@@ -150,7 +150,7 @@ json world_json(const sim::WorldSnapshot& w) {
   json corpses=json::array(); for(const auto& c:w.corpses) corpses.push_back({{"id",c.id},{"position",position_json(c.position)},{"age",c.age},{"cleanable",c.cleanable}});
   json dropped=json::array(); for(const auto& d:w.dropped_food) dropped.push_back({{"id",d.id},{"position",position_json(d.position)},{"nutrient",enum_value(d.nutrient)},{"amount",d.amount},{"age",d.age}});
   json actors=json::array(); for(const auto& a:w.actors) actors.push_back(actor_json(a));
-  json frontiers=json::array(); for(const auto p:w.frontiers) frontiers.push_back(position_json(p));
+  json dig_faces=json::array(); for(const auto& f:w.dig_faces) dig_faces.push_back({{"anchor",position_json(f.anchor)},{"heading",position_json(f.heading)},{"length",f.length},{"blocked",f.blocked},{"chamber",f.chamber}});
   return {{"seed",w.seed},{"tick",w.tick},{"next_id",w.next_id},{"home",position_json(w.home)},
     {"terrain",std::move(terrain)},{"sources",std::move(sources)},
     {"stores",{{"carbohydrate",w.stores.carbohydrate},{"protein",w.stores.protein},{"carbohydrate_capacity",w.stores.carbohydrate_capacity},{"protein_capacity",w.stores.protein_capacity}}},
@@ -158,7 +158,7 @@ json world_json(const sim::WorldSnapshot& w) {
     {"rng",{{"behavior_state",w.behavior_rng_state},{"behavior_increment",w.behavior_rng_increment},{"lifecycle_state",w.lifecycle_rng_state},{"lifecycle_increment",w.lifecycle_rng_increment}}},
     {"trails",w.trails},{"dig_work",w.dig_work},
     {"task_diagnostics",{{"stimuli",w.task_diagnostics.stimuli},{"workers_by_task",w.task_diagnostics.workers_by_task}}},
-    {"frontiers",std::move(frontiers)},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"actors",std::move(actors)},
+    {"dig_faces",std::move(dig_faces)},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"actors",std::move(actors)},
     {"spoil_mound",w.spoil_mound},{"starting_nest_air",w.starting_nest_air},{"connected_nest_air",w.connected_nest_air},{"nursery_capacity",w.nursery_capacity},
     {"next_laying",w.next_laying},{"queen_starvation",w.queen_starvation},{"queen_alive",w.queen_alive},{"decline",w.decline},{"extinct",w.extinct},
     {"focus",enum_value(w.focus)},{"adaptation_levels",w.adaptation_levels},
@@ -174,7 +174,9 @@ sim::WorldSnapshot read_world(const json& j) {
   w.stats=read_stats(j.at("stats")); const auto& rng=j.at("rng"); w.behavior_rng_state=rng.at("behavior_state").get<std::uint64_t>(); w.behavior_rng_increment=rng.at("behavior_increment").get<std::uint64_t>(); w.lifecycle_rng_state=rng.at("lifecycle_state").get<std::uint64_t>(); w.lifecycle_rng_increment=rng.at("lifecycle_increment").get<std::uint64_t>();
   w.trails=j.at("trails").get<std::vector<std::uint16_t>>(); w.dig_work=j.at("dig_work").get<std::vector<std::uint16_t>>();
   const auto& td=j.at("task_diagnostics"); w.task_diagnostics.stimuli=td.at("stimuli").get<std::array<std::uint16_t,4>>(); w.task_diagnostics.workers_by_task=td.at("workers_by_task").get<std::array<std::uint32_t,5>>();
-  for(const auto& item:j.at("frontiers")) w.frontiers.push_back(read_position(item));
+  // Saves written before excavation had persistent faces simply carry none; the plan reseeds them
+  // from the grid on the next survey, which loses no history a face was holding.
+  if(j.contains("dig_faces")) for(const auto& item:j.at("dig_faces")) { sim::DigFace face; face.anchor=read_position(item.at("anchor")); face.heading=read_position(item.at("heading")); face.length=item.at("length").get<std::uint16_t>(); face.blocked=item.at("blocked").get<std::uint16_t>(); face.chamber=item.at("chamber").get<bool>(); face.active=true; if(w.dig_faces.size()<sim::kMaxDigFaces && std::abs(face.heading.x)+std::abs(face.heading.y)==1) w.dig_faces.push_back(face); }
   for(const auto& item:j.at("brood")) w.brood.push_back({item.at("id").get<sim::EntityId>(),read_enum<sim::BroodStage>(item.at("stage"),2,"brood stage"),read_position(item.at("position")),item.at("progress").get<sim::Tick>(),item.at("target").get<sim::Tick>(),item.at("care_remaining").get<sim::Tick>(),item.at("starvation").get<sim::Tick>(),read_enum<sim::BroodRole>(item.at("role"),1,"brood role")});
   for(const auto& item:j.at("corpses")) w.corpses.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),item.at("age").get<sim::Tick>(),item.at("cleanable").get<bool>()});
   for(const auto& item:j.at("dropped_food")) w.dropped_food.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),read_enum<sim::Nutrient>(item.at("nutrient"),1,"nutrient"),item.at("amount").get<std::int64_t>(),item.at("age").get<sim::Tick>()});
