@@ -197,7 +197,13 @@ private:
   [[nodiscard]] bool consume(Nutrient nutrient, std::int64_t amount);
   [[nodiscard]] Tick brood_target(BroodStage stage, BroodRole role) const;
   void spawn_winged_queen(GridPos position);
+  // Places one carried grain of spoil on the surface mound. Returns false when there is nowhere
+  // left to put it.
+  bool deposit_spoil();
+  [[nodiscard]] bool cell_is_occupied(GridPos cell) const;
   void update_maturity();
+  void refresh_frontier_claims();
+  void release_frontier_claim(const WorkerMind& mind);
 
   std::uint64_t seed_{};
   Tick tick_{};
@@ -213,6 +219,9 @@ private:
   TrailField trails_;
   TaskDiagnostics task_diagnostics_{};
   std::vector<GridPos> frontiers_;
+  // How many excavators are already committed to each frontier, refreshed once per tick. Counting
+  // this per excavator meant rescanning every worker and made the tick cost quadratic.
+  std::array<int, 8> frontier_claims_{};
   std::uint64_t frontier_revision_{};
   std::vector<std::uint16_t> dig_work_;
   std::vector<BroodSnapshot> brood_;

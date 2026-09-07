@@ -143,6 +143,7 @@ void World::step() {
   for (const entt::entity e : ordered_entities_) { Position& p = registry_.get<Position>(e); p.previous_x_subcells = p.x_subcells; p.previous_y_subcells = p.y_subcells; }
   if (tick_ % kTicksPerSecond == 0) recompute_needs_and_frontiers();
   task_diagnostics_.workers_by_task.fill(0);
+  refresh_frontier_claims();
   int path_budget = 16; for (const entt::entity e : ordered_entities_) if (registry_.all_of<WorkerMind>(e)) process_worker(e, path_budget);
   if ((tick_ + 1) % kTicksPerSecond == 0) update_biology();
   if ((tick_ + 1) % 4 == 0) update_trails();
@@ -206,6 +207,8 @@ void World::choose_task(const entt::entity e) {
     }
     mind.task = choose_weighted_task(weights, behavior_rng_);
   }
+  // Switching task also gives up any frontier this worker was committed to.
+  release_frontier_claim(mind);
   mind.committed_until = tick_ + 5 * kTicksPerSecond; mind.has_target = false; mind.action_ticks = 0;
 }
 
@@ -318,14 +321,25 @@ void World::route_to(const entt::entity e, const GridPos target, int& path_budge
 
 void World::process_excavator(const entt::entity e, int& path_budget) {
   WorkerMind& mind = registry_.get<WorkerMind>(e);
-  if (!mind.has_target || !grid_.in_bounds(mind.target) || !is_diggable(grid_.at(mind.target))) { mind.has_target = false; for (const GridPos frontier : frontiers_) { int claims = 0; for (const entt::entity other : ordered_entities_) if (registry_.all_of<WorkerMind>(other)) { const WorkerMind& om = registry_.get<WorkerMind>(other); claims += om.task == Task::Excavate && om.has_target && om.target == frontier ? 1 : 0; } if (claims < 2) { mind.target = frontier; mind.has_target = true; break; } } }
+  if (!mind.has_target || !grid_.in_bounds(mind.target) || !is_diggable(grid_.at(mind.target))) {
+    // Give up the old claim before taking a new one, or this worker is counted on two frontiers.
+    release_frontier_claim(mind);
+    mind.has_target = false;
+    for (std::size_t index = 0; index < frontiers_.size(); ++index) {
+      if (frontier_claims_[index] >= 2) continue;
+      ++frontier_claims_[index];
+      mind.target = frontiers_[index];
+      mind.has_target = true;
+      break;
+    }
+  }
   if (!mind.has_target) return; const GridPos current = registry_.get<Position>(e).cell(); GridPos work = current; bool adjacent = false;
   for (const GridPos d : kNeighbors) { const GridPos candidate{mind.target.x + d.x, mind.target.y + d.y}; if (grid_.passable(candidate)) { work = candidate; adjacent = candidate == current; if (adjacent) break; } }
   if (!adjacent) { route_to(e, work, path_budget); return; } if (++mind.action_ticks < 10) return; mind.action_ticks = 0; std::uint16_t& remaining = dig_work_[grid_index(mind.target)]; if (remaining == 0) remaining = grid_.at(mind.target) == Material::Clay ? 2'500 : 1'000;
   const std::uint16_t dig_amount = static_cast<std::uint16_t>(
       (100 + 25 * adaptation_levels_[0]) * (traits_.industry_tier >= 1 ? 115 : 100) / 100);
   ++stats_.productive_worker_ticks;
-  if (remaining <= dig_amount) { remaining = 0; grid_.set(mind.target, Material::Air); Cargo& cargo = registry_.get<Cargo>(e); cargo.kind = CargoKind::Spoil; cargo.amount = 1'000; ++stats_.cells_excavated; mind.has_target = false; }
+  if (remaining <= dig_amount) { remaining = 0; grid_.set(mind.target, Material::Air); Cargo& cargo = registry_.get<Cargo>(e); cargo.kind = CargoKind::Spoil; cargo.amount = 1'000; ++stats_.cells_excavated; release_frontier_claim(mind); mind.has_target = false; }
   else remaining = static_cast<std::uint16_t>(remaining - dig_amount);
 }
 
@@ -362,7 +376,7 @@ void World::process_cleaner(const entt::entity e, int& path_budget) {
 void World::deliver_non_food(const entt::entity e) {
   Cargo& cargo = registry_.get<Cargo>(e); Movement& m = registry_.get<Movement>(e); const GridPos outlet{home_.x, 31};
   if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), outlet); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
-  if (cargo.kind == CargoKind::Spoil) { ++spoil_mound_; ++stats_.spoil_delivered; } else if (cargo.kind == CargoKind::Corpse) ++stats_.corpses_cleaned; cargo = Cargo{}; clear_path(m);
+  if (cargo.kind == CargoKind::Spoil) { if (deposit_spoil()) ++spoil_mound_; ++stats_.spoil_delivered; } else if (cargo.kind == CargoKind::Corpse) ++stats_.corpses_cleaned; cargo = Cargo{}; clear_path(m);
 }
 
 bool World::consume(const Nutrient nutrient, const std::int64_t amount) { std::int64_t& store = store_for(nutrient); if (store < amount) return false; store -= amount; if (nutrient == Nutrient::Carbohydrate) stats_.consumed_carbohydrate += amount; else stats_.consumed_protein += amount; return true; }
@@ -421,6 +435,70 @@ void World::update_biology() {
   update_maturity();
   const bool has_survivors = std::any_of(ordered_entities_.begin(), ordered_entities_.end(), [this](const entt::entity e) { return registry_.all_of<Life>(e); });
   extinct_ = !queen_alive_ && !has_survivors && brood_.empty();
+}
+
+bool World::cell_is_occupied(const GridPos cell) const {
+  for (const entt::entity entity : ordered_entities_) {
+    if (registry_.get<Position>(entity).cell() == cell) return true;
+  }
+  for (const CorpseSnapshot& corpse : corpses_) if (corpse.position == cell) return true;
+  for (const DroppedCargoSnapshot& dropped : dropped_food_) if (dropped.position == cell) return true;
+  for (const BroodSnapshot& item : brood_) if (item.position == cell) return true;
+  return false;
+}
+
+bool World::deposit_spoil() {
+  // Excavated grains are carried out and tipped onto the surface, so the crater around the
+  // entrance is real terrain the colony built rather than a drawn-on decoration. Grains settle on
+  // the lowest nearby pile, which grows a cone outward instead of a tower.
+  constexpr int kFirstColumn = 2;   // leaves the entrance shaft and its shoulders clear
+  constexpr int kLastColumn = 30;
+  // A spoil apron is low and broad. Left uncapped it grows into walls either side of the entrance
+  // that every forager has to climb, which taxes the colony far more than a real ant hill does.
+  constexpr int kMaxPile = 5;
+  int best_score = 0;
+  bool found = false;
+  GridPos best{};
+  for (int radius = kFirstColumn; radius <= kLastColumn; ++radius) {
+    for (const int side : {-1, 1}) {
+      const int column = home_.x + side * radius;
+      if (column < 0 || column >= Grid::kWidth) continue;
+      int height = 0;
+      while (height < 32 && !is_passable(grid_.at({column, 31 - height}))) ++height;
+      if (height >= kMaxPile) continue;
+      const GridPos target{column, 31 - height};
+      if (grid_.at(target) != Material::Sky) continue;
+      if (cell_is_occupied(target)) continue;
+      // Favour low piles close to the entrance, so the mound stays a mound.
+      const int score = height * 3 + radius;
+      if (!found || score < best_score) { found = true; best_score = score; best = target; }
+    }
+  }
+  if (!found) return false;
+  grid_.set(best, Material::Soil);
+  return true;
+}
+
+void World::release_frontier_claim(const WorkerMind& mind) {
+  if (!mind.has_target) return;
+  for (std::size_t index = 0; index < frontiers_.size(); ++index) {
+    if (frontiers_[index] == mind.target) {
+      if (frontier_claims_[index] > 0) --frontier_claims_[index];
+      return;
+    }
+  }
+}
+
+void World::refresh_frontier_claims() {
+  frontier_claims_.fill(0);
+  for (const entt::entity entity : ordered_entities_) {
+    if (!registry_.all_of<WorkerMind>(entity)) continue;
+    const WorkerMind& mind = registry_.get<WorkerMind>(entity);
+    if (mind.task != Task::Excavate || !mind.has_target) continue;
+    for (std::size_t index = 0; index < frontiers_.size(); ++index) {
+      if (frontiers_[index] == mind.target) { ++frontier_claims_[index]; break; }
+    }
+  }
 }
 
 void World::update_maturity() {

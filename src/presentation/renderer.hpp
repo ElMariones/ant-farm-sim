@@ -67,6 +67,7 @@ private:
   Texture2D terrain_texture_{};
   bool terrain_texture_ready_{};
   std::uint64_t terrain_revision_{};
+  double terrain_built_at_{};
   // Ants keep facing where they were last going, so a stopped ant does not snap to a default.
   std::unordered_map<sim::EntityId, float> heading_;
   std::optional<sim::EntityId> selected_id_;

@@ -399,6 +399,9 @@ void Renderer::draw_recovery_prompt() const {
 
 void Renderer::refresh_terrain_texture(const game::GameView& view) {
   if (terrain_texture_ready_ && terrain_revision_ == view.terrain_revision) return;
+  const double now = GetTime();
+  if (terrain_texture_ready_ && now - terrain_built_at_ < 0.15) return;
+  terrain_built_at_ = now;
 
   const int width = view.grid_width * kTerrainDetail;
   const int height = view.grid_height * kTerrainDetail;
@@ -536,11 +539,6 @@ void Renderer::draw_world(const game::GameView& view, const double interpolation
     const Color color = dropped.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
     DrawCircleV(center, 0.65F, color);
     DrawCircleLinesV(center, 0.85F, kPaper);
-  }
-
-  if (view.spoil_mound > 0) {
-    const float mound = std::min(8.0F, 1.5F + static_cast<float>(view.spoil_mound) * 0.3F);
-    DrawEllipse(view.home.x + 10, 31, mound, mound * 0.35F, Color{126, 91, 58, 255});
   }
 
   // Dead ants never reuse an id, so the heading cache would creep upward over a long session.

@@ -121,3 +121,27 @@ the other nutrient. Both rules were added after a measured colony death; see the
 
 A path and its cursor are cleared together. Clearing a path while leaving `next_cell` past its end
 produces a movement state that snapshot validation rejects.
+
+
+## Spoil becomes terrain (M5)
+
+A worker that finishes a cell carries the grain to the surface outlet and tips it onto the mound,
+which is real terrain rather than a counter. Grains settle on the lowest nearby pile, scoring
+`height * 3 + radius`, so the apron grows outward as a cone instead of a tower. The entrance column
+and its two shoulders are never used, so the nest cannot bury itself, and piles are capped at five
+cells: an uncapped version grew eleven-cell walls either side of the entrance that every forager
+had to climb. A grain is never placed on a cell occupied by an ant, corpse, brood item or dropped
+cargo.
+
+Because this turns sky into soil, it is the first thing in the simulation that makes a cell
+*impassable*. Cached paths crossing that cell are invalidated by the navigation revision, so a
+saved path may legitimately cross solid ground; snapshot validation therefore only requires paths
+still marked current to be walkable.
+
+## Frontier claims are counted once per tick (M5)
+
+Each excavator used to rescan every worker for every frontier to see how many were already
+committed, which made the tick cost quadratic in population and timed the sixty-minute soak out in
+CI. Claims are now tallied once per tick and adjusted as workers take and give up targets — on a
+new target, on finishing a cell, and on switching task. Missing any of those releases leaves
+phantom claims that push excavators off frontiers and measurably slows the colony.

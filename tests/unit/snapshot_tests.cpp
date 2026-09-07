@@ -203,6 +203,18 @@ TEST_CASE("duplicate identifiers and broken references are rejected",
     document["run"]["world"]["trails"] = json::array({0, 0});
     CHECK_FALSE(ant::persistence::decode_profile(document.dump()).profile.has_value());
   }
+  SECTION("a current path crossing solid ground") {
+    json document = decode_to_json(profile);
+    for (json& item : document["run"]["world"]["actors"]) {
+      if (!item.at("worker").get<bool>() || item.at("movement").at("path").empty()) continue;
+      item["movement"]["path_valid"] = true;
+      const std::size_t solid = first_solid_cell(document["run"]["world"]["terrain"]);
+      item["movement"]["path"][0] = json::array({static_cast<int>(solid % ant::sim::Grid::kWidth),
+                                                 static_cast<int>(solid / ant::sim::Grid::kWidth)});
+      break;
+    }
+    CHECK_FALSE(ant::persistence::decode_profile(document.dump()).profile.has_value());
+  }
   SECTION("an actor stands inside solid rock") {
     json document = decode_to_json(profile);
     const std::size_t solid = first_solid_cell(document["run"]["world"]["terrain"]);

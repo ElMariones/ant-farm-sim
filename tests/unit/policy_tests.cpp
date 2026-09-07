@@ -1,5 +1,8 @@
 #include "game/policy.hpp"
 #include "game/session.hpp"
+#include "persistence/profile_codec.hpp"
+
+#include <cstdlib>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -108,4 +111,78 @@ TEST_CASE("workers never commit more food to a store than it can accept", "[worl
     CHECK(store + carried + source.reserved <= capacity + 2'000);
   }
   CHECK(world.invariant_holds());
+}
+
+
+namespace {
+
+int pile_height(const ant::sim::World& world, const int column) {
+  int height = 0;
+  while (height < 32 && !ant::sim::is_passable(world.grid().at({column, 31 - height}))) ++height;
+  return height;
+}
+
+} // namespace
+
+TEST_CASE("excavated grains are tipped onto a real surface mound", "[world][excavation]") {
+  ant::sim::World world(42);
+  const int entrance = world.home().x;
+  REQUIRE(pile_height(world, entrance) == 0);
+
+  world.run_ticks(1'200 * kSecond);
+  REQUIRE(world.stats().spoil_delivered > 20);
+
+  // Every delivered grain that found a home is a cell of terrain the colony actually placed.
+  CHECK(world.spoil_mound() > 20);
+  CHECK(world.spoil_mound() <= world.stats().spoil_delivered);
+
+  // The entrance and its shoulders stay clear, so the nest never buries itself.
+  CHECK(pile_height(world, entrance) == 0);
+  CHECK(pile_height(world, entrance - 1) == 0);
+  CHECK(pile_height(world, entrance + 1) == 0);
+
+  // The spoil forms a cone: taller near the entrance than out at the edges.
+  const int inner = pile_height(world, entrance - 3);
+  const int outer = pile_height(world, entrance - 16);
+  CHECK(inner > 0);
+  CHECK(inner >= outer);
+
+  // And it is roughly symmetric, because grains settle on whichever side is lower.
+  CHECK(std::abs(pile_height(world, entrance - 5) - pile_height(world, entrance + 5)) <= 3);
+  CHECK(world.invariant_holds());
+}
+
+TEST_CASE("a growing mound never traps the colony", "[world][excavation]") {
+  ant::sim::World world(7);
+  world.run_ticks(1'500 * kSecond);
+
+  REQUIRE(world.spoil_mound() > 0);
+  // Foraging keeps working with the mound in the way: ants climb it rather than being walled in.
+  CHECK(world.stats().completed_round_trips > 50);
+  CHECK(world.stores().carbohydrate > 0);
+  CHECK(world.stores().protein > 0);
+  CHECK(world.living_workers() > 6);
+  CHECK_FALSE(world.extinct());
+  CHECK(world.invariant_holds());
+}
+
+TEST_CASE("terrain closing under a stale path survives a save", "[world][excavation][persistence]") {
+  // Depositing spoil turns sky into soil, which can close over a path an ant had already planned.
+  // That path is stale by construction, so the profile must still be valid.
+  ant::game::Session live(42);
+  for (int tick = 0; tick < 40'000; ++tick) {
+    live.step();
+    if (live.world().stats().spoil_delivered > 0) break;
+  }
+  REQUIRE(live.world().stats().spoil_delivered > 0);
+
+  const auto decoded = ant::persistence::decode_profile(
+      ant::persistence::encode_profile(ant::persistence::make_new_profile(live)));
+  REQUIRE(decoded.profile.has_value());
+  ant::game::Session resumed = ant::game::Session::restore(*decoded.profile->run);
+  CHECK(resumed.world().canonical_hash() == live.world().canonical_hash());
+
+  live.step_ticks(2'000);
+  resumed.step_ticks(2'000);
+  CHECK(resumed.world().canonical_hash() == live.world().canonical_hash());
 }

@@ -26,7 +26,7 @@ Suggested prompt for a smaller model:
 | M2 Living colony | Complete — T005–T007 |
 | M3 Safe incremental slice | Complete — T008–T010 |
 | M4 Complete generation loop | Complete — T011–T013 |
-| M5 Release candidate | Not started |
+| M5 Release candidate | In progress — T015 performance done; T014 UI and T016 packaging open |
 
 ## Environment observations
 
@@ -34,7 +34,7 @@ Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.
 
 ## Validation of this deliverable
 
-- `cmake --build --preset headless` and `ctest --preset headless -E "sixty simulated minutes"`: pass, **94/94 tests** (60 before this task). Same suite passes under the `dev` preset.
+- `ctest --preset headless`: pass, **99/99 tests including the sixty-minute soak**, in 183 s. The soak previously timed out on the Linux runner.
 - `cmake --preset release` and `cmake --build --preset release`: pass.
 - `ant_headless --verify-round-trip` passes at 20,000 / 60,000 / 100,000 / 120,000 / 140,000 / 160,000 / 200,000 ticks on seed 42, and at 40,000 and 120,000 ticks on seeds 1, 7, 101 and 2026.
 
@@ -83,6 +83,14 @@ Four real bugs surfaced by pushing further than M3 did:
 4. **Save/load lost path and frontier staleness**, so a resumed colony skipped a replan it still owed itself and diverged from an uninterrupted run after roughly 20,000 ticks. Staleness is now stored as a fact and restored with revision 0, which the grid never issues.
 
 The profile schema is **version 2**, with a tested in-memory v1 migration that fills castes, traits, the maturity latch and the flight receipt, and keeps the migrated colony's canonical hash.
+
+### M5 in progress — T015 performance and the spoil mound
+
+- **Excavated grains are now real terrain.** A worker that finishes a cell carries the grain out and tips it onto a surface mound that grows as a cone around the entrance, capped at five cells so it stays an apron. The entrance column and its shoulders are never used, so the nest cannot bury itself, and a grain is never placed on an occupied cell. This replaced a counter that only drove a drawn-on ellipse.
+- This is the first thing in the simulation that makes a cell *impassable*, which invalidates cached paths. Snapshot validation now only requires paths still marked current to be walkable; a stale path crossing ground that closed under it is expected and is replanned before it is walked.
+- **The sixty-minute soak was timing out in CI on Linux**, which is what turned M4's build red. Each excavator rescanned every worker for every frontier to count existing claims, so the tick cost was quadratic in population. Claims are now tallied once per tick and released when a worker takes a new target, finishes a cell, or switches task. Missing any of those releases leaves phantom claims that measurably slow the colony, which is how the first attempt was caught.
+- Debug soak: **50 s, down from a 1,500 s CTest timeout**. Release soak 1.9 s. The full suite including the soak now runs in 183 s.
+- Balance was re-measured after both changes and held: flight at 30.1–30.8 min with purchases and 40.2–40.4 min without, first investment at 2.7–2.9 min, no extinctions. First delivery moved from 52.6–75.0 s to 64.8–117.4 s, because foragers now climb the spoil their own colony piled up. Vigor I improves first birth on four of five seeds rather than five; recorded in the balance report.
 
 ### Presentation upgrade (visual slice of T014)
 
