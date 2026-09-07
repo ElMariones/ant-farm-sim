@@ -86,6 +86,7 @@ if(ANT_BUILD_DESKTOP)
   ant_configure_target(ant_presentation)
 
   add_executable(ant_farm
+    src/app/asset_paths.cpp
     src/app/main.cpp
     src/app/save_coordinator.cpp
     src/app/window_size.cpp
@@ -115,9 +116,11 @@ endif()
 
 if(BUILD_TESTING)
   add_executable(ant_tests
+    src/app/asset_paths.cpp
     src/app/save_coordinator.cpp
     src/app/window_size.cpp
     src/presentation/ui_state.cpp
+    tests/unit/asset_paths_tests.cpp
     tests/unit/grid_tests.cpp
     tests/unit/maturity_tests.cpp
     tests/unit/policy_tests.cpp

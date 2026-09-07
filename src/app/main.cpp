@@ -1,3 +1,4 @@
+#include "app/asset_paths.hpp"
 #include "app/save_coordinator.hpp"
 #include "app/window_size.hpp"
 #include "game/prestige.hpp"
@@ -43,10 +44,14 @@ struct Options {
 
 std::filesystem::path resolve_config(const Options& options) {
   if (options.config_path) return *options.config_path;
-  const std::filesystem::path beside_binary =
-      std::filesystem::path("config") / "progression.json";
-  if (std::filesystem::exists(beside_binary)) return beside_binary;
-  return std::filesystem::path(ANT_SOURCE_CONFIG_DIR) / "progression.json";
+  // A packaged app is launched with an arbitrary working directory, so look beside the executable
+  // before anything else. The source tree is only a development fallback.
+  std::error_code error;
+  const std::filesystem::path working = std::filesystem::current_path(error);
+  return ant::app::resolve_bundled_file(
+      "config/progression.json", GetApplicationDirectory(), error ? std::filesystem::path{} : working,
+      std::filesystem::path(ANT_SOURCE_CONFIG_DIR).parent_path(),
+      [](const std::filesystem::path& path) { return std::filesystem::exists(path); });
 }
 
 ant::game::ProgressionConfig load_content(const Options& options) {

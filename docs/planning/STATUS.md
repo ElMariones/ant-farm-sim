@@ -34,7 +34,7 @@ Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.
 
 ## Validation of this deliverable
 
-- `ctest --preset headless`: pass, **108/108 tests including the sixty-minute soak**, in 184 s. The soak previously timed out on the Linux runner.
+- `ctest --preset headless`: pass, **113/113 tests including the sixty-minute soak**, in 183 s. The soak previously timed out on the Linux runner; CI is green on Linux and macOS again.
 - `cmake --preset release` and `cmake --build --preset release`: pass.
 - `ant_headless --verify-round-trip` passes at 20,000 / 60,000 / 100,000 / 120,000 / 140,000 / 160,000 / 200,000 ticks on seed 42, and at 40,000 and 120,000 ticks on seeds 1, 7, 101 and 2026.
 
@@ -91,6 +91,18 @@ The profile schema is **version 2**, with a tested in-memory v1 migration that f
 - **The sixty-minute soak was timing out in CI on Linux**, which is what turned M4's build red. Each excavator rescanned every worker for every frontier to count existing claims, so the tick cost was quadratic in population. Claims are now tallied once per tick and released when a worker takes a new target, finishes a cell, or switches task. Missing any of those releases leaves phantom claims that measurably slow the colony, which is how the first attempt was caught.
 - Debug soak: **50 s, down from a 1,500 s CTest timeout**. Release soak 1.9 s. The full suite including the soak now runs in 183 s.
 - Balance was re-measured after both changes and held: flight at 30.1–30.8 min with purchases and 40.2–40.4 min without, first investment at 2.7–2.9 min, no extinctions. First delivery moved from 52.6–75.0 s to 64.8–117.4 s, because foragers now climb the spoil their own colony piled up. Vigor I improves first birth on four of five seeds rather than five; recorded in the balance report.
+
+### Packaging groundwork (T016, partial)
+
+Bundled data is now resolved from the executable's own directory first, then the working
+directory, then the source tree as a development fallback. The previous order tried a
+working-directory-relative path and then an absolute path baked in at compile time, which happens
+to work on this machine and would fail on a player's, because a packaged app is launched from
+Finder with an arbitrary working directory and no source tree. The resolution order is covered by
+unit tests using a fake filesystem predicate, and a missing file now reports the location a
+shipped build would have used rather than a source path the player does not have.
+
+The `.app` bundle itself, version metadata and the release archive are still open.
 
 ### Interface interaction layer (T014, partial)
 
