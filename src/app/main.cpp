@@ -399,6 +399,16 @@ int main(const int argc, char** argv) {
               ant::game::prepare_trait_purchase(current, *branch, identity.revision);
           static_cast<void>(commit_transaction(
               prepared, TextFormat("%s improved permanently", ant::game::trait_branch_name(*branch))));
+        } else if (renderer.abandon_requested() && !between_runs) {
+          ant::game::ProfileSnapshot current = build_candidate(identity, *session, speed, false);
+          current.revision = identity.revision;
+          const auto prepared = ant::game::prepare_abandon_run(current, identity.revision);
+          if (commit_transaction(prepared, "The colony was abandoned. No Legacy was earned.")) {
+            between_runs = true;
+            paused = true;
+            renderer.close_panels();
+            renderer.open_legacy_panel();
+          }
         } else if (renderer.new_run_requested() && between_runs) {
           ant::game::ProfileSnapshot current = build_candidate(identity, *session, speed, true);
           current.revision = identity.revision;

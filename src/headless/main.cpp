@@ -110,7 +110,15 @@ void report(const std::uint64_t seed, const ant::game::Session& session) {
             << ",\"roundTrips\":" << world.stats().completed_round_trips
             << ",\"carryingWorkers\":" << carrying_workers
             << ",\"carbohydrate\":" << world.stores().carbohydrate
+            << ",\"carbohydrateCapacity\":" << world.stores().carbohydrate_capacity
             << ",\"protein\":" << world.stores().protein
+            << ",\"proteinCapacity\":" << world.stores().protein_capacity
+            << ",\"foodPiles\":" << world.granary().size()
+            << ",\"byTask\":[" << world.task_diagnostics().workers_by_task[0] << ','
+            << world.task_diagnostics().workers_by_task[1] << ','
+            << world.task_diagnostics().workers_by_task[2] << ','
+            << world.task_diagnostics().workers_by_task[3] << ','
+            << world.task_diagnostics().workers_by_task[4] << ']'
             << ",\"delivered\":" << world.stats().delivered
             << ",\"excavated\":" << world.stats().cells_excavated
             << ",\"births\":" << world.stats().workers_born

@@ -39,6 +39,7 @@ struct GameView {
   std::vector<sim::BroodSnapshot> brood;
   std::vector<sim::CorpseSnapshot> corpses;
   std::vector<sim::DroppedCargoSnapshot> dropped_food;
+  std::vector<sim::FoodPile> granary;
   std::vector<std::uint16_t> trails;
   sim::TaskDiagnostics tasks{};
   int nursery_capacity{};

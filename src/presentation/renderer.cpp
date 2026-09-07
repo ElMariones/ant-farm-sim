@@ -15,15 +15,20 @@ namespace {
 constexpr Color kDeepSoil{48, 41, 35, 255};
 constexpr Color kSandySoil{141, 105, 70, 255};
 constexpr Color kClay{102, 74, 58, 255};
-constexpr Color kTunnel{23, 27, 25, 255};
+constexpr Color kTunnel{28, 30, 27, 255};
+// The trodden floor of a gallery, warmed by the soil it was cut from.
+constexpr Color kTunnelFloor{74, 58, 44, 255};
 constexpr Color kRoot{67, 52, 40, 255};
 constexpr Color kBedrock{37, 33, 30, 255};
+constexpr Color kStone{96, 99, 104, 255};
 constexpr Color kFoliage{112, 132, 87, 255};
 constexpr Color kSky{201, 213, 195, 255};
 constexpr Color kPaper{238, 228, 204, 255};
 constexpr Color kInk{37, 45, 40, 255};
 constexpr Color kCarbohydrate{221, 189, 103, 255};
 constexpr Color kProtein{199, 127, 101, 255};
+constexpr Color kBerry{168, 74, 82, 255};
+constexpr Color kHusk{92, 74, 52, 255};
 constexpr Color kBrood{234, 219, 192, 255};
 constexpr Color kSelection{152, 203, 195, 255};
 constexpr Color kPaperSoft{246, 239, 220, 255};
@@ -107,6 +112,11 @@ Color material_color(const sim::Material material, const int x, const int y,
   if (material == sim::Material::Bedrock) {
     return kBedrock;
   }
+  if (material == sim::Material::Stone) {
+    // Cool grey flecked against the warm soil, so a lens reads as rock and not as darker dirt.
+    const std::uint64_t speck = hash_pixel(x, y, seed ^ 0x570E5ULL);
+    return shade(kStone, static_cast<int>(speck % 19ULL) - 9);
+  }
   const std::uint64_t fleck = (static_cast<std::uint64_t>(x) * 73856093ULL) ^
                               (static_cast<std::uint64_t>(y) * 19349663ULL) ^ (seed * 83492791ULL);
   const int variation = static_cast<int>((fleck >> 4U) % 13ULL) - 6;
@@ -168,7 +178,8 @@ void Renderer::draw_text(const char* text, const int x, const int y, const int s
 }
 
 void Renderer::draw_button(const Rectangle bounds, const char* label, const bool active,
-                          const WidgetVisual& visual, const bool enabled) const {
+                          const WidgetVisual& visual, const bool enabled,
+                          const std::optional<Icon> icon) const {
   // Lift on hover, settle on press. Both are eased weights, so the motion is smooth and matches at
   // any frame rate.
   const float lift = visual.hover * 2.0F - visual.press * 2.6F;
@@ -186,9 +197,58 @@ void Renderer::draw_button(const Rectangle bounds, const char* label, const bool
   DrawRectangleRounded(body, 0.22F, 8, fill);
   const Color edge = active ? Color{69, 111, 103, 255} : mix(kWarmLine, Color{146, 128, 96, 255}, visual.hover);
   DrawRectangleRoundedLinesEx(body, 0.22F, 8, 1.0F + visual.hover * 0.6F, edge);
-  const Vector2 measured = MeasureTextEx(font_, label, 19.0F, 0.0F);
-  DrawTextEx(font_, label, {body.x + (body.width - measured.x) * 0.5F, body.y + 8.0F}, 19.0F, 0.0F,
-             enabled ? kInk : kMutedInk);
+
+  const Color foreground = enabled ? kInk : kMutedInk;
+  const bool has_label = label != nullptr && label[0] != '\0';
+  const float glyph = std::min(body.height - 14.0F, 20.0F);
+  const Vector2 measured =
+      has_label ? MeasureTextEx(font_, label, 19.0F, 0.0F) : Vector2{0.0F, 0.0F};
+  const float gap = icon && has_label ? 7.0F : 0.0F;
+  const float content = (icon ? glyph : 0.0F) + gap + measured.x;
+  float cursor = body.x + (body.width - content) * 0.5F;
+  if (icon) {
+    draw_icon(*icon, {cursor, body.y + (body.height - glyph) * 0.5F, glyph, glyph}, foreground);
+    cursor += glyph + gap;
+  }
+  if (has_label) {
+    DrawTextEx(font_, label, {cursor, body.y + (body.height - measured.y) * 0.5F}, 19.0F, 0.0F,
+               foreground);
+  }
+}
+
+bool Renderer::button(const std::uint32_t id, const Rectangle bounds, const char* label,
+                      const bool active, const bool enabled, const std::optional<Icon> icon,
+                      const char* tooltip, const char* tooltip_title) {
+  const WidgetVisual visual =
+      ui_.track(id, {bounds.x, bounds.y, bounds.width, bounds.height}, enabled);
+  draw_button(bounds, label, active, visual, enabled, icon);
+  // An icon-only control still has to say what it does, so hover always carries a name.
+  const bool named = label != nullptr && label[0] != '\0';
+  if (visual.over && tooltip != nullptr) {
+    tooltip_title_ = tooltip_title != nullptr ? tooltip_title : (named ? label : tooltip);
+    tooltip_body_ = tooltip;
+    tooltip_x_ = bounds.x;
+    tooltip_y_ = bounds.y;
+  }
+  return visual.clicked && enabled;
+}
+
+Rectangle Renderer::draw_modal_card(const float width, const float height,
+                                    const char* title) const {
+  const float screen_width = static_cast<float>(GetScreenWidth());
+  const float screen_height = static_cast<float>(GetScreenHeight());
+  DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Color{24, 28, 25, 185});
+  const float panel_width = std::min(screen_width - 80.0F, width);
+  const Rectangle panel{(screen_width - panel_width) * 0.5F, (screen_height - height) * 0.5F,
+                        panel_width, height};
+  DrawRectangleRounded({panel.x + 2.0F, panel.y + 8.0F, panel.width, panel.height}, 0.05F, 8,
+                       Fade(BLACK, 0.28F));
+  DrawRectangleRounded(panel, 0.05F, 8, kPaper);
+  DrawRectangleRoundedLinesEx(panel, 0.05F, 8, 1.0F, kWarmLine);
+  draw_text(title, static_cast<int>(panel.x) + 28, static_cast<int>(panel.y) + 24, 24);
+  DrawLine(static_cast<int>(panel.x) + 28, static_cast<int>(panel.y) + 60,
+           static_cast<int>(panel.x + panel.width) - 28, static_cast<int>(panel.y) + 60, kWarmLine);
+  return panel;
 }
 
 void Renderer::draw_tooltip(const char* title, const char* body, const float anchor_x,
@@ -243,6 +303,8 @@ void Renderer::update_input(const float delta_seconds) {
     clear_requests();
     ui_.cancel_capture();
     world_click_.cancel();
+    // Leaving the menu disarms the confirmation, so it can never fire on a later visit.
+    abandon_armed_ = false;
   }
   const Vector2 mouse = GetMousePosition();
   const bool colony = !scenes_.modal() && !transitioned;
@@ -297,72 +359,67 @@ void Renderer::update_input(const float delta_seconds) {
 
 void Renderer::draw(const game::GameView& view, const double interpolation_alpha, const bool paused,
                     const int speed, const bool simulation_limited) {
+  // Gait and other world motion run off this clock rather than wall time, so a paused colony is
+  // genuinely still: legs stop mid-stride instead of treading air.
+  if (!paused) animation_clock_ += GetFrameTime();
   update_selection(view, interpolation_alpha);
   ui_.set_input_region(!scenes_.modal());
   tooltip_title_ = nullptr;
   ClearBackground(kDeepSoil);
   draw_world(view);
   draw_interface(view, paused, speed, simulation_limited);
-  if (tooltip_title_ != nullptr && !scenes_.modal()) {
-    draw_tooltip(tooltip_title_, tooltip_body_.c_str(), tooltip_x_, tooltip_y_);
-  }
   if (legacy_panel_open()) draw_legacy_panel(view);
   if (scenes_.scene() == Scene::Recovery) draw_recovery_prompt();
   if (scenes_.scene() == Scene::PauseMenu) draw_pause_menu();
+  // Drawn last so a tooltip raised by a modal control sits above the modal that owns it.
+  if (tooltip_title_ != nullptr) {
+    draw_tooltip(tooltip_title_, tooltip_body_.c_str(), tooltip_x_, tooltip_y_);
+  }
 }
 
-void Renderer::draw_legacy_panel(const game::GameView& view) const {
-  const int width = GetScreenWidth();
-  const int height = GetScreenHeight();
-  DrawRectangle(0, 0, width, height, Color{24, 28, 25, 180});
-  const float panel_width = static_cast<float>(std::min(width - 80, 640));
-  const Rectangle panel{(static_cast<float>(width) - panel_width) * 0.5F,
-                        static_cast<float>(height) * 0.5F - 210.0F, panel_width, 420.0F};
-  DrawRectangleRounded(panel, 0.04F, 8, kPaper);
-  DrawRectangleRoundedLinesEx(panel, 0.04F, 8, 1.0F, kWarmLine);
-  const int left = static_cast<int>(panel.x) + 28;
-  int line = static_cast<int>(panel.y) + 26;
+void Renderer::draw_legacy_panel(const game::GameView& view) {
   const game::LegacyView& legacy = view.legacy;
+  const Rectangle panel =
+      draw_modal_card(660.0F, 460.0F, legacy.between_runs ? "Between colonies" : "Nuptial flight");
+  const int left = static_cast<int>(panel.x) + 28;
+  const float right = panel.x + panel.width - 28.0F;
+  int line = static_cast<int>(panel.y) + 74;
+  ui_.set_input_region(true);
 
-  draw_text(legacy.between_runs ? "Between colonies" : "Nuptial flight", left, line, 23);
-  line += 34;
   draw_text(TextFormat("Generation %llu   |   Flights %llu   |   Legacy %lld",
                        static_cast<unsigned long long>(legacy.generation),
                        static_cast<unsigned long long>(legacy.successful_flights),
                        static_cast<long long>(legacy.wallet)),
             left, line, 17, kMutedInk);
-  line += 34;
+  line += 32;
 
   if (!legacy.between_runs) {
     const game::FlightPreview& flight = legacy.flight;
     draw_text("READINESS", left, line, 14, kMutedInk);
     line += 24;
-    const auto tick = [](const bool done) { return done ? "[x]" : "[ ]"; };
-    draw_text(TextFormat("%s  Mature colony", tick(flight.mature)), left, line, 17);
-    line += 25;
-    draw_text(TextFormat("%s  Living workers  %d / 100", tick(flight.living_workers >= 100),
-                         flight.living_workers),
-              left, line, 17);
-    line += 25;
-    draw_text(TextFormat("%s  Workers born  %llu / 150", tick(flight.births >= 150),
-                         static_cast<unsigned long long>(flight.births)),
-              left, line, 17);
-    line += 25;
-    draw_text(TextFormat("%s  Run time  %llu / 720 s",
-                         tick(flight.run_ticks >= 720 * static_cast<unsigned>(sim::kTicksPerSecond)),
-                         static_cast<unsigned long long>(flight.run_ticks / sim::kTicksPerSecond)),
-              left, line, 17);
-    line += 25;
-    draw_text(TextFormat("%s  Winged queens  %d / 3", tick(flight.live_winged_queens >= 3),
-                         flight.live_winged_queens),
-              left, line, 17);
-    line += 34;
+    const auto requirement = [&](const bool done, const char* text) {
+      draw_icon(done ? Icon::Check : Icon::Cross, {static_cast<float>(left), static_cast<float>(line) + 2.0F, 16.0F, 16.0F},
+                done ? Color{104, 142, 96, 255} : kMutedInk);
+      draw_text(text, left + 24, line, 17, done ? kInk : kMutedInk);
+      line += 25;
+    };
+    requirement(flight.mature, "Mature colony");
+    requirement(flight.living_workers >= 100,
+                TextFormat("Living workers  %d / 100", flight.living_workers));
+    requirement(flight.births >= 150,
+                TextFormat("Workers born  %llu / 150", static_cast<unsigned long long>(flight.births)));
+    requirement(flight.run_ticks >= 720 * static_cast<unsigned>(sim::kTicksPerSecond),
+                TextFormat("Run time  %llu / 720 s",
+                           static_cast<unsigned long long>(flight.run_ticks / sim::kTicksPerSecond)));
+    requirement(flight.live_winged_queens >= 3,
+                TextFormat("Winged queens  %d / 3", flight.live_winged_queens));
+    line += 12;
     draw_text(TextFormat("Legacy on flight: %lld   (2 base + %lld births + %lld queens)",
                          static_cast<long long>(flight.payout.total),
                          static_cast<long long>(flight.payout.birth_bonus),
                          static_cast<long long>(flight.payout.queen_bonus)),
               left, line, 18);
-    line += 26;
+    line += 25;
     if (flight.next_birth_threshold > 0) {
       draw_text(TextFormat("Next step at %llu births%s",
                            static_cast<unsigned long long>(flight.next_birth_threshold),
@@ -371,37 +428,53 @@ void Renderer::draw_legacy_panel(const game::GameView& view) const {
                                : ""),
                 left, line, 15, kMutedInk);
     }
-    line += 34;
-    draw_text(flight.eligible ? "Enter  -  send the flight and end this colony"
-                              : game::flight_block_reason(flight.block),
-              left, line, 18, flight.eligible ? kInk : kMutedInk);
+    line += 30;
+    if (!flight.eligible) {
+      draw_text(game::flight_block_reason(flight.block), left, line, 16, kMutedInk);
+    }
+    if (button(110, {static_cast<float>(left), panel.y + panel.height - 76.0F, 250.0F, 44.0F},
+               "Send the flight", false, flight.eligible, Icon::Flight,
+               flight.eligible ? "Ends this colony and pays Legacy (Enter)"
+                               : game::flight_block_reason(flight.block))) {
+      flight_requested_ = true;
+    }
   } else {
     draw_text("PERMANENT TRAITS", left, line, 14, kMutedInk);
     line += 26;
-    const auto cost_label = [](const std::int64_t cost) {
-      return cost < 0 ? "complete" : TextFormat("%lld Legacy", static_cast<long long>(cost));
+    const auto trait = [&](const std::uint32_t id, const game::TraitBranch branch, const Icon icon,
+                           const char* name, const int tier, const std::int64_t cost,
+                           const char* effect) {
+      const bool maxed = cost < 0;
+      const bool affordable = !maxed && legacy.wallet >= cost;
+      draw_text(TextFormat("%s  tier %d/4", name, tier), left, line, 18, affordable ? kInk : kMutedInk);
+      draw_text(effect, left, line + 23, 14, kMutedInk);
+      const char* price = maxed ? "Complete" : TextFormat("%lld Legacy", static_cast<long long>(cost));
+      if (button(id, {right - 176.0F, static_cast<float>(line) - 4.0F, 176.0F, 40.0F}, price, false,
+                 affordable, icon,
+                 maxed ? "Every tier is bought"
+                       : affordable ? "Buy this tier permanently" : "Not enough Legacy yet",
+                 name)) {
+        trait_requested_ = branch;
+      }
+      line += 62;
     };
-    draw_text(TextFormat("V   Vigor  tier %d/4   %s", legacy.vigor_tier,
-                         cost_label(legacy.vigor_cost)),
-              left, line, 18,
-              legacy.vigor_cost >= 0 && legacy.wallet >= legacy.vigor_cost ? kInk : kMutedInk);
-    line += 27;
-    draw_text("     Faster eggs, more founders, faster brood, thriftier queen", left, line, 14,
-              kMutedInk);
-    line += 30;
-    draw_text(TextFormat("Y   Industry  tier %d/4   %s", legacy.industry_tier,
-                         cost_label(legacy.industry_cost)),
-              left, line, 18,
-              legacy.industry_cost >= 0 && legacy.wallet >= legacy.industry_cost ? kInk : kMutedInk);
-    line += 27;
-    draw_text("     Faster digging, faster movement, bigger loads, cheaper Work", left, line, 14,
-              kMutedInk);
-    line += 40;
-    draw_text("C   -  found the next colony", left, line, 18);
+    trait(111, game::TraitBranch::Vigor, Icon::Queen, "Vigor", legacy.vigor_tier,
+          legacy.vigor_cost, "Faster eggs, more founders, faster brood, thriftier queen");
+    trait(112, game::TraitBranch::Industry, Icon::Mandibles, "Industry", legacy.industry_tier,
+          legacy.industry_cost, "Faster digging, faster movement, bigger loads, cheaper Work");
+    if (button(113, {static_cast<float>(left), panel.y + panel.height - 76.0F, 260.0F, 44.0F},
+               "Found the next colony", false, true, Icon::Colony,
+               "Starts a fresh colony with the traits you own (C)")) {
+      new_run_requested_ = true;
+    }
   }
 
-  draw_text("L or Escape closes this panel", left,
-            static_cast<int>(panel.y + panel.height) - 34, 15, kMutedInk);
+  if (button(114, {right - 116.0F, panel.y + panel.height - 76.0F, 116.0F, 44.0F}, "Close", false,
+             true, Icon::Close, "Back to the colony (Esc)")) {
+    scenes_.close();
+    ui_.cancel_capture();
+    world_click_.cancel();
+  }
 }
 
 std::string Renderer::truncate_to_width(const std::string& text, const float max_width,
@@ -415,30 +488,28 @@ std::string Renderer::truncate_to_width(const std::string& text, const float max
   return fitted + "...";
 }
 
-void Renderer::draw_recovery_prompt() const {
-  const int width = GetScreenWidth();
-  const int height = GetScreenHeight();
-  DrawRectangle(0, 0, width, height, Color{24, 28, 25, 190});
-  const float panel_width = static_cast<float>(std::min(width - 80, 620));
-  const Rectangle panel{(static_cast<float>(width) - panel_width) * 0.5F,
-                        static_cast<float>(height) * 0.5F - 110.0F, panel_width, 220.0F};
-  DrawRectangleRounded(panel, 0.06F, 8, kPaper);
-  DrawRectangleRoundedLinesEx(panel, 0.06F, 8, 1.0F, kWarmLine);
+void Renderer::draw_recovery_prompt() {
+  const Rectangle panel = draw_modal_card(640.0F, 268.0F, "Saved colony could not be read");
   const int left = static_cast<int>(panel.x) + 28;
-  int line = static_cast<int>(panel.y) + 28;
-  draw_text("Saved colony could not be read", left, line, 22);
-  line += 40;
+  int line = static_cast<int>(panel.y) + 78;
   draw_text("The current save file is damaged. It has been left untouched", left, line, 17,
             kMutedInk);
   line += 24;
   draw_text("for diagnosis, and nothing is being saved right now.", left, line, 17, kMutedInk);
-  line += 38;
-  draw_text("R  -  restore the previous saved revision", left, line, 18);
-  line += 28;
-  draw_text("N  -  start a new colony instead", left, line, 18);
+  ui_.set_input_region(true);
+  if (button(120, {static_cast<float>(left), panel.y + panel.height - 82.0F, 268.0F, 44.0F},
+             "Restore last revision", false, true, Icon::Restore,
+             "Loads the previous validated save (R)")) {
+    recover_requested_ = true;
+  }
+  if (button(121, {static_cast<float>(left) + 284.0F, panel.y + panel.height - 82.0F, 240.0F, 44.0F},
+             "Start a new colony", false, true, Icon::Reset,
+             "Keeps the damaged file for diagnosis (N)")) {
+    new_colony_requested_ = true;
+  }
   if (!status_line_.empty()) {
     const std::string fitted = truncate_to_width(status_line_, panel.width - 56.0F, 15.0F);
-    draw_text(fitted.c_str(), left, static_cast<int>(panel.y + panel.height) - 34, 15, kMutedInk);
+    draw_text(fitted.c_str(), left, static_cast<int>(panel.y + panel.height) - 28, 15, kMutedInk);
   }
 }
 
@@ -469,6 +540,17 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
       const bool lit = solid && (material_at(cell_x, cell_y - 1) == sim::Material::Air ||
                                  material_at(cell_x, cell_y - 1) == sim::Material::Sky);
       const bool shadowed = solid && material_at(cell_x, cell_y + 1) == sim::Material::Air;
+      // A tunnel is a space, not a hole: it takes a trodden floor where the ground carries it and
+      // a little warmth bounced off the walls beside it.
+      const auto is_solid = [&](const int x, const int y) {
+        const sim::Material at = material_at(x, y);
+        return at != sim::Material::Sky && at != sim::Material::Air;
+      };
+      const bool floored = !solid && is_solid(cell_x, cell_y + 1);
+      const int walls = !solid ? (is_solid(cell_x - 1, cell_y) ? 1 : 0) +
+                                     (is_solid(cell_x + 1, cell_y) ? 1 : 0) +
+                                     (is_solid(cell_x, cell_y - 1) ? 1 : 0)
+                               : 0;
 
       for (int sub_y = 0; sub_y < kTerrainDetail; ++sub_y) {
         for (int sub_x = 0; sub_x < kTerrainDetail; ++sub_x) {
@@ -484,7 +566,11 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
             if (lit && sub_y == 0) color = shade(color, 22);
             if (shadowed && sub_y == kTerrainDetail - 1) color = shade(color, -16);
           } else if (material == sim::Material::Air) {
-            color = shade(kTunnel, open_above && sub_y == 0 ? 10 : 0);
+            const std::uint64_t dust = hash_pixel(px, py, view.seed ^ 0xA1EULL);
+            const bool floor_row = floored && sub_y == kTerrainDetail - 1;
+            color = floor_row ? mix(kTunnel, kTunnelFloor, 0.85F)
+                              : shade(kTunnel, walls * 5 + (open_above && sub_y == 0 ? 8 : 0) +
+                                                   static_cast<int>(dust % 5ULL));
           } else {
             // A calm sky band that lifts slightly toward the top of the frame.
             color = shade(kSky, static_cast<int>((1.0F - static_cast<float>(py) / 96.0F) * 10.0F));
@@ -502,6 +588,86 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
   UnloadImage(image);
   terrain_texture_ready_ = true;
   terrain_revision_ = view.terrain_revision;
+}
+
+void Renderer::draw_food_source(const sim::FoodSource& source) const {
+  const Vector2 ground{static_cast<float>(source.position.x) + 0.5F,
+                       static_cast<float>(source.position.y) + 1.0F};
+  const float fullness =
+      source.capacity <= 0
+          ? 0.0F
+          : std::clamp(static_cast<float>(source.amount) / static_cast<float>(source.capacity),
+                       0.0F, 1.0F);
+  const std::uint64_t noise = hash_pixel(source.position.x, source.position.y, 0x50D1CEULL);
+
+  if (source.nutrient == sim::Nutrient::Carbohydrate) {
+    // A fallen berry with a spill of seed husks around it: the sweet, replenishing staple.
+    const float radius = 0.9F + fullness * 1.5F;
+    draw_oriented_ellipse(ground, radius * 1.5F, 0.45F, 0.0F, Fade(BLACK, 0.20F));
+    const int grains = 4 + static_cast<int>(fullness * 12.0F);
+    for (int grain = 0; grain < grains; ++grain) {
+      const std::uint64_t spread = hash_pixel(grain, source.position.x, noise);
+      const float offset = static_cast<float>(spread % 100ULL) / 100.0F - 0.5F;
+      const float depth = static_cast<float>((spread >> 12U) % 100ULL) / 100.0F;
+      const Vector2 seed{ground.x + offset * (2.0F + radius * 2.2F), ground.y - 0.16F - depth * 0.5F};
+      draw_oriented_ellipse(seed, 0.30F, 0.17F, offset * 1.6F,
+                            shade(kCarbohydrate, static_cast<int>((spread >> 20U) % 30ULL) - 15));
+    }
+    DrawCircleV({ground.x, ground.y - radius * 0.72F}, radius, kBerry);
+    DrawCircleV({ground.x - radius * 0.3F, ground.y - radius * 1.05F}, radius * 0.32F,
+                shade(kBerry, 46));
+    DrawLineEx({ground.x + radius * 0.2F, ground.y - radius * 1.5F},
+               {ground.x + radius * 0.75F, ground.y - radius * 2.2F}, 0.2F, kFoliage);
+    return;
+  }
+
+  // A dead beetle: the protein prize, picked apart as the colony carries it away.
+  const float body = 0.7F + fullness * 1.4F;
+  draw_oriented_ellipse(ground, body * 1.7F, 0.45F, 0.0F, Fade(BLACK, 0.20F));
+  const Vector2 centre{ground.x, ground.y - body * 0.62F};
+  for (int side = -1; side <= 1; side += 2) {
+    const float sign = static_cast<float>(side);
+    for (int leg = 0; leg < 3; ++leg) {
+      const float along = (static_cast<float>(leg) - 1.0F) * body * 0.55F;
+      DrawLineEx({centre.x + along, centre.y},
+                 {centre.x + along + sign * body * 0.9F, ground.y - 0.1F}, 0.18F, kHusk);
+    }
+  }
+  draw_oriented_ellipse(centre, body * 1.25F, body * 0.72F, 0.0F, kProtein);
+  draw_oriented_ellipse({centre.x, centre.y - body * 0.2F}, body * 0.9F, body * 0.34F, 0.0F,
+                        shade(kProtein, 26));
+  DrawLineEx({centre.x - body * 1.2F, centre.y}, {centre.x + body * 1.2F, centre.y}, 0.16F,
+             shade(kProtein, -34));
+  draw_oriented_ellipse({centre.x - body * 1.25F, centre.y}, body * 0.42F, body * 0.4F, 0.0F,
+                        shade(kProtein, -22));
+}
+
+void Renderer::draw_granary(const game::GameView& view) const {
+  const float zoom = camera_.zoom();
+  for (const sim::FoodPile& pile : view.granary) {
+    if (pile.amount <= 0) continue;
+    const Color color = pile.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
+    const float fullness = std::clamp(
+        static_cast<float>(pile.amount) / static_cast<float>(sim::kGrainsPerStoreCell), 0.0F, 1.0F);
+    const float x = static_cast<float>(pile.position.x);
+    const float y = static_cast<float>(pile.position.y);
+    if (zoom < 2.2F) {
+      // Too small for grains: a tinted cell still shows where the colony keeps its food.
+      DrawRectangleV({x, y + 1.0F - fullness}, {1.0F, fullness}, Fade(color, 0.85F));
+      continue;
+    }
+    // A heap that grows up from the chamber floor, so a full store reads at a glance.
+    const int grains = 1 + static_cast<int>(fullness * 6.0F);
+    DrawRectangleV({x + 0.05F, y + 0.86F}, {0.9F, 0.12F}, Fade(shade(color, -50), 0.55F));
+    for (int grain = 0; grain < grains; ++grain) {
+      const std::uint64_t noise = hash_pixel(pile.position.x * 7 + grain, pile.position.y, 0x6A1EULL);
+      const float across = 0.16F + static_cast<float>(noise % 68ULL) / 100.0F;
+      const float rise = static_cast<float>(grain) * 0.11F;
+      draw_oriented_ellipse({x + across, y + 0.84F - rise - static_cast<float>((noise >> 9U) % 9ULL) * 0.012F},
+                            0.19F, 0.13F, static_cast<float>((noise >> 17U) % 30ULL) * 0.1F,
+                            shade(color, static_cast<int>((noise >> 24U) % 26ULL) - 13));
+    }
+  }
 }
 
 void Renderer::draw_world(const game::GameView& view) {
@@ -545,22 +711,20 @@ void Renderer::draw_world(const game::GameView& view) {
     DrawCircleV(nest, 1.6F * static_cast<float>(ring), Fade(Color{92, 74, 54, 255}, 0.06F));
   }
 
-  for (const sim::FoodSource& source : view.sources) {
-    const Color color = source.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein;
-    const Vector2 center{static_cast<float>(source.position.x) + 0.5F,
-                         static_cast<float>(source.position.y) + 0.5F};
-    if (source.nutrient == sim::Nutrient::Carbohydrate) {
-      DrawCircleV(center, 2.7F, color);
-      DrawCircleLinesV(center, 3.2F, kInk);
-    } else {
-      DrawPoly(center, 5, 3.1F, -18.0F, color);
-      DrawPolyLines(center, 5, 3.2F, -18.0F, kInk);
-    }
-  }
+  for (const sim::FoodSource& source : view.sources) draw_food_source(source);
+  draw_granary(view);
 
   for (const sim::BroodSnapshot& brood : view.brood) {
-    const Vector2 center{static_cast<float>(brood.position.x) + 0.5F,
-                         static_cast<float>(brood.position.y) + 0.5F};
+    Vector2 center{static_cast<float>(brood.position.x) + 0.5F,
+                   static_cast<float>(brood.position.y) + 0.5F};
+    if (brood.carried_by != 0) {
+      // Held brood rides on the nurse's interpolated pose, so it travels smoothly with her rather
+      // than hopping from cell to cell.
+      const auto carrier = std::find_if(poses_.begin(), poses_.end(),
+          [&brood](const ActorPose& pose) { return pose.id == brood.carried_by; });
+      if (carrier == poses_.end()) continue;
+      center = {carrier->centre.x, carrier->centre.y - 0.9F};
+    }
     const Color shell = brood.role == sim::BroodRole::Gyne ? Color{226, 214, 232, 255} : kBrood;
     DrawCircleV({center.x + 0.1F, center.y + 0.14F}, 0.62F, Fade(BLACK, 0.28F));
     if (brood.stage == sim::BroodStage::Egg) {
@@ -658,8 +822,7 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const ActorPose& pose,
 
   if (detailed) {
     // Alternating tripod gait, phased per ant so a column does not march in lockstep.
-    const float phase = static_cast<float>(GetTime()) * 7.0F +
-                        static_cast<float>(actor.id % 13ULL) * 0.48F;
+    const float phase = animation_clock_ * 7.0F + static_cast<float>(actor.id % 13ULL) * 0.48F;
     for (int leg = 0; leg < 3; ++leg) {
       const float root_along = (0.45F - static_cast<float>(leg) * 0.42F) * scale;
       for (int side = -1; side <= 1; side += 2) {
@@ -759,49 +922,53 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text("LIVING COLONY", 23, 44, 13, kMutedInk);
   const int metric_start = width >= 1180 ? 190 : 170;
   const int metric_width = (width - metric_start - 16) / 7;
-  std::vector<std::pair<const char*, std::string>> metrics{
-      {"WORKERS", std::to_string(worker_count)}, {"BROOD", std::to_string(view.brood.size())},
-      {"CARBS", TextFormat("%lld", static_cast<long long>(view.stores.carbohydrate / 1000))},
-      {"PROTEIN", TextFormat("%lld", static_cast<long long>(view.stores.protein / 1000))},
-      {"WORK", std::to_string(view.work)}};
+  struct Metric { Icon icon; const char* label; std::string value; };
+  std::vector<Metric> metrics{
+      {Icon::Worker, "WORKERS", std::to_string(worker_count)},
+      {Icon::Egg, "BROOD", std::to_string(view.brood.size())},
+      {Icon::Seed, "CARBS", TextFormat("%lld", static_cast<long long>(view.stores.carbohydrate / 1000))},
+      {Icon::Prey, "PROTEIN", TextFormat("%lld", static_cast<long long>(view.stores.protein / 1000))},
+      {Icon::Mandibles, "WORK", std::to_string(view.work)}};
   // Winged queens and Legacy only appear once they mean something, so an early colony is not shown
   // counters it cannot act on.
   if (view.legacy.flight.live_winged_queens > 0) {
-    metrics.emplace_back("WINGED", std::to_string(view.legacy.flight.live_winged_queens));
+    metrics.push_back({Icon::Flight, "WINGED", std::to_string(view.legacy.flight.live_winged_queens)});
   }
   if (view.legacy.wallet > 0 || view.legacy.successful_flights > 0) {
-    metrics.emplace_back("LEGACY", std::to_string(view.legacy.wallet));
+    metrics.push_back({Icon::Queen, "LEGACY", std::to_string(view.legacy.wallet)});
   }
   for (std::size_t index = 0; index < metrics.size(); ++index) {
     const int x = metric_start + static_cast<int>(index) * metric_width;
-    draw_text(metrics[index].first, x, 14, 12, kMutedInk);
-    draw_text(metrics[index].second.c_str(), x, 32, 23);
+    draw_icon(metrics[index].icon, {static_cast<float>(x), 13.0F, 13.0F, 13.0F}, kMutedInk);
+    draw_text(metrics[index].label, x + 17, 14, 12, kMutedInk);
+    draw_text(metrics[index].value.c_str(), x, 32, 23);
   }
 
   const float footer_y = layout_.footer.y;
   DrawRectangle(0, static_cast<int>(footer_y), width, 88, kPaperSoft);
   DrawLine(0, static_cast<int>(footer_y), width, static_cast<int>(footer_y), kWarmLine);
-  const auto footer_button = [&](const std::uint32_t id, const Rectangle bounds, const char* label,
-                                const bool active) {
-    const WidgetVisual visual = ui_.track(id, {bounds.x, bounds.y, bounds.width, bounds.height});
-    draw_button(bounds, label, active, visual);
-    return visual.clicked;
-  };
-  if (footer_button(1, {18, footer_y + 8, 94, 40}, paused ? "Resume" : "Pause", paused))
+  if (button(1, {18, footer_y + 8, 108, 40}, paused ? "Resume" : "Pause", paused, true,
+             paused ? Icon::Play : Icon::Pause, "Space"))
     toggle_pause_requested_ = true;
-  if (footer_button(2, {130, footer_y + 8, 58, 40}, "1x", speed == 1)) speed_requested_ = 1;
-  if (footer_button(3, {194, footer_y + 8, 58, 40}, "5x", speed == 5)) speed_requested_ = 5;
-  if (footer_button(4, {258, footer_y + 8, 58, 40}, "20x", speed == 20)) speed_requested_ = 20;
-  if (footer_button(5, {330, footer_y + 8, 78, 40}, "Save", false)) save_requested_ = true;
+  if (button(2, {138, footer_y + 8, 52, 40}, "", speed == 1, true, Icon::SpeedOne,
+             "Real time (key 1)")) speed_requested_ = 1;
+  if (button(3, {196, footer_y + 8, 52, 40}, "", speed == 5, true, Icon::SpeedFast,
+             "Five times speed (key 2)")) speed_requested_ = 5;
+  if (button(4, {254, footer_y + 8, 52, 40}, "", speed == 20, true, Icon::SpeedFastest,
+             "Twenty times speed (key 3)")) speed_requested_ = 20;
+  if (button(5, {320, footer_y + 8, 92, 40}, "Save", false, true, Icon::Save, "Save now (S)"))
+    save_requested_ = true;
   draw_text(TextFormat("Generation %llu", static_cast<unsigned long long>(view.legacy.generation)),
-            430, static_cast<int>(footer_y) + 18, 18);
-  if (footer_button(6, {static_cast<float>(width - 216), footer_y + 8, 92, 40}, "Flight", false)) {
+            428, static_cast<int>(footer_y) + 18, 18);
+  if (button(6, {static_cast<float>(width - 232), footer_y + 8, 108, 40}, "Flight", false, true,
+             Icon::Flight, "Nuptial flight and Legacy (L)")) {
     scenes_.open_legacy();
     ui_.cancel_capture();
     world_click_.cancel();
     ui_.set_input_region(false);
   }
-  if (footer_button(7, {static_cast<float>(width - 112), footer_y + 8, 94, 40}, "Colony", inspector_open_)) {
+  if (button(7, {static_cast<float>(width - 112), footer_y + 8, 94, 40}, "Colony", inspector_open_,
+             true, Icon::Colony, "Show or hide the inspector (I)")) {
     // Apply next frame, together with camera/layout and input ownership.
     inspector_toggle_requested_ = true;
   }
@@ -859,26 +1026,28 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
             panel_x + 22, py(338), 16, kMutedInk);
   draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, py(359), 16, kMutedInk);
 
-  const std::array<const char*,4> focus_labels{{"Bal","Grow","Expand","Food"}};
+  const std::array<Icon, 4> focus_icons{
+      {Icon::Balance, Icon::Growth, Icon::Expansion, Icon::Seed}};
+  const std::array<const char*, 4> focus_hints{{"Even effort across every job (B)",
+                                                "Tend the brood first (G)",
+                                                "Dig new chambers first (X)",
+                                                "Bring food home first (F)"}};
   for (int index = 0; index < 4; ++index) {
     Rectangle bounds = focus_button_bounds(panel_x, index);
     bounds.y -= panel_scroll_;
-    const WidgetVisual visual =
-        ui_.track(20 + static_cast<std::uint32_t>(index),
-                  {bounds.x, bounds.y, bounds.width, bounds.height}, view.focus_available);
-    draw_button(bounds, focus_labels[static_cast<std::size_t>(index)],
-                static_cast<int>(view.focus) == index, visual, view.focus_available);
-    if (visual.clicked) focus_requested_ = static_cast<sim::Focus>(index);
-    if (visual.hovered && !view.focus_available) {
-      tooltip_title_ = "Colony focus";
-      tooltip_body_ = "Unlocks at 12 workers";
-      tooltip_x_ = bounds.x;
-      tooltip_y_ = bounds.y;
+    const std::size_t slot = static_cast<std::size_t>(index);
+    if (button(20 + static_cast<std::uint32_t>(index), bounds, "",
+               static_cast<int>(view.focus) == index, view.focus_available, focus_icons[slot],
+               view.focus_available ? focus_hints[slot] : "Unlocks at 12 workers",
+               focus_name(static_cast<sim::Focus>(index)))) {
+      focus_requested_ = static_cast<sim::Focus>(index);
     }
   }
   DrawLine(panel_x + 20, py(415), width - 20, py(415), kWarmLine);
   draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,py(419),16,kMutedInk);
-  const std::array<const char*,4> upgrades{{"Mandibles","Nursery","Trails","Queen"}};
+  const std::array<const char*, 4> upgrades{{"Mandibles", "Nursery", "Trails", "Queen"}};
+  const std::array<Icon, 4> upgrade_icons{
+      {Icon::Mandibles, Icon::Nursery, Icon::Trail, Icon::Queen}};
   const std::array<const char*, 4> upgrade_effects{{"+25% dig rate per level",
                                                     "-10% brood time per level",
                                                     "+20% carry per level",
@@ -886,11 +1055,12 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   for (int index = 0; index < 4; ++index) {
     Rectangle card = upgrade_card_bounds(panel_x, panel_width, index);
     card.y -= panel_scroll_;
-    const std::int64_t cost = view.upgrade_costs[static_cast<std::size_t>(index)];
+    const std::size_t slot = static_cast<std::size_t>(index);
+    const std::int64_t cost = view.upgrade_costs[slot];
     const bool maxed = cost < 0;
     const bool affordable = !maxed && view.work >= cost;
-    // Tracked as enabled so an unaffordable card still explains itself on hover; the click is
-    // gated below instead.
+    // Tracked as enabled so an unaffordable card still lifts and explains itself on hover; the
+    // purchase itself is gated below.
     const WidgetVisual visual =
         ui_.track(30 + static_cast<std::uint32_t>(index), {card.x, card.y, card.width, card.height});
     const float lift = visual.hover * 1.6F - visual.press * 2.0F;
@@ -902,22 +1072,22 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
                            Fade(BLACK, 0.09F * visual.hover));
     }
     DrawRectangleRounded(body, 0.15F, 5, mix(resting, warmed, visual.hover));
-    if (affordable) {
-      DrawRectangleRoundedLinesEx(body, 0.15F, 5, 0.6F + visual.hover,
-                                  Fade(Color{122, 148, 96, 255}, 0.5F + visual.hover * 0.5F));
-    }
-    const char* label =
-        maxed ? TextFormat("F%d  %s  L%d  max", index + 1, upgrades[static_cast<std::size_t>(index)],
-                           view.upgrade_levels[static_cast<std::size_t>(index)])
-              : TextFormat("F%d  %s  L%d  %lld", index + 1, upgrades[static_cast<std::size_t>(index)],
-                           view.upgrade_levels[static_cast<std::size_t>(index)],
-                           static_cast<long long>(cost));
-    draw_text(label, panel_x + 28, static_cast<int>(body.y) + 6, 14, affordable ? kInk : kMutedInk);
+    DrawRectangleRoundedLinesEx(body, 0.15F, 5, 0.6F + visual.hover,
+                                affordable ? Fade(Color{122, 148, 96, 255}, 0.5F + visual.hover * 0.5F)
+                                           : Fade(kWarmLine, 0.7F));
+    const Color ink = affordable ? kInk : kMutedInk;
+    draw_icon(upgrade_icons[slot], {body.x + 7.0F, body.y + 6.0F, 18.0F, 18.0F}, ink);
+    draw_text(TextFormat("%s  L%d", upgrades[slot], view.upgrade_levels[slot]),
+              static_cast<int>(body.x) + 31, static_cast<int>(body.y) + 7, 15, ink);
+    const char* price = maxed ? "max" : TextFormat("%lld", static_cast<long long>(cost));
+    const Vector2 measured = MeasureTextEx(font_, price, 15.0F, 0.0F);
+    draw_text(price, static_cast<int>(body.x + body.width - measured.x) - 10,
+              static_cast<int>(body.y) + 7, 15, ink);
     if (visual.clicked && affordable) upgrade_requested_ = static_cast<game::UpgradeId>(index);
-    if (visual.hovered) {
-      tooltip_title_ = upgrades[static_cast<std::size_t>(index)];
+    if (visual.over) {
+      tooltip_title_ = upgrades[slot];
       tooltip_body_ = maxed ? "Fully adapted"
-                    : affordable ? upgrade_effects[static_cast<std::size_t>(index)]
+                    : affordable ? upgrade_effects[slot]
                                  : std::string("Needs ") + std::to_string(cost) + " Work";
       tooltip_x_ = body.x;
       tooltip_y_ = body.y;
@@ -969,22 +1139,44 @@ void Renderer::update_selection(const game::GameView& view, const double interpo
 }
 
 void Renderer::draw_pause_menu() {
-  const int width = GetScreenWidth(), height = GetScreenHeight();
-  DrawRectangle(0, 0, width, height, Color{24, 28, 25, 180});
-  const Rectangle panel{static_cast<float>(width / 2 - 210),
-                        static_cast<float>(height / 2 - 120), 420, 240};
-  DrawRectangleRounded(panel, 0.08F, 8, kPaper);
-  draw_text("Paused", width / 2 - 178, height / 2 - 90, 25);
-  draw_text("Escape closes this menu", width / 2 - 178, height / 2 - 52, 17, kMutedInk);
+  const Rectangle panel = draw_modal_card(440.0F, abandon_armed_ ? 350.0F : 302.0F, "Paused");
+  const float left = panel.x + 30.0F;
+  const float wide = panel.width - 60.0F;
+  draw_text("The colony is holding still.", static_cast<int>(left),
+            static_cast<int>(panel.y) + 74, 17, kMutedInk);
   ui_.set_input_region(true);
-  const Rectangle resume{panel.x + 30, panel.y + 112, 360, 40};
-  const auto resume_visual = ui_.track(100, {resume.x, resume.y, resume.width, resume.height});
-  draw_button(resume, "Return to colony", false, resume_visual);
-  if (resume_visual.clicked) { scenes_.close(); ui_.cancel_capture(); world_click_.cancel(); }
-  const Rectangle save{panel.x + 30, panel.y + 166, 360, 40};
-  const auto save_visual = ui_.track(101, {save.x, save.y, save.width, save.height});
-  draw_button(save, "Save colony", false, save_visual);
-  if (save_visual.clicked) save_requested_ = true;
+  float line = panel.y + 110.0F;
+  if (button(100, {left, line, wide, 44.0F}, "Return to colony", false, true, Icon::Play,
+             "Resume the simulation (Esc)")) {
+    scenes_.close();
+    ui_.cancel_capture();
+    world_click_.cancel();
+  }
+  line += 54.0F;
+  if (button(101, {left, line, wide, 44.0F}, "Save colony", false, true, Icon::Save,
+             "Write the colony to disk now")) {
+    save_requested_ = true;
+  }
+  line += 54.0F;
+  if (!abandon_armed_) {
+    if (button(102, {left, line, wide, 44.0F}, "Abandon colony", false, true, Icon::Reset,
+               "Ends this run with no Legacy and asks to confirm")) {
+      abandon_armed_ = true;
+    }
+    return;
+  }
+  draw_text("This ends the run with no Legacy.", static_cast<int>(left), static_cast<int>(line),
+            16, kProtein);
+  line += 26.0F;
+  if (button(103, {left, line, wide * 0.5F - 5.0F, 44.0F}, "Confirm", false, true, Icon::Reset,
+             "Abandon this colony for good")) {
+    abandon_requested_ = true;
+    abandon_armed_ = false;
+  }
+  if (button(104, {left + wide * 0.5F + 5.0F, line, wide * 0.5F - 5.0F, 44.0F}, "Keep it", false,
+             true, Icon::Close, "Leave the colony alone")) {
+    abandon_armed_ = false;
+  }
 }
 
 void Renderer::clear_requests() {
@@ -995,6 +1187,7 @@ void Renderer::clear_requests() {
   save_requested_ = false;
   recover_requested_ = false;
   new_colony_requested_ = false;
+  abandon_requested_ = false;
   flight_requested_ = false;
   new_run_requested_ = false;
   trait_requested_.reset();

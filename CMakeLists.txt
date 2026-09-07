@@ -77,6 +77,7 @@ if(ANT_BUILD_DESKTOP)
   add_library(ant_presentation
     src/presentation/camera.cpp
     src/presentation/desktop_input.cpp
+    src/presentation/icons.cpp
     src/presentation/renderer.cpp
     src/presentation/ui_state.cpp
     src/presentation/interaction.cpp

@@ -60,12 +60,21 @@ TEST_CASE("a face plans a corridor cross-section across its heading", "[dig]") {
 TEST_CASE("a face never plans material it may not remove or ground outside the envelope", "[dig]") {
   Grid grid = soil_with_air({{192, 60}});
   grid.set({191, 61}, Material::Bedrock);
-  grid.set({193, 61}, Material::Root);
+  grid.set({193, 61}, Material::Stone);
   DigFace face; face.anchor = {192, 60}; face.heading = {0, 1}; face.active = true;
 
   const std::vector<GridPos> cells = plan_with(face).slice(grid, face, kHome);
   REQUIRE(cells.size() == 1);
   CHECK(cells.front() == GridPos{192, 61});
+
+  // A root is slow going, not a wall: it is planned like any other ground.
+  Grid rooted = soil_with_air({{192, 60}});
+  rooted.set({193, 61}, Material::Root);
+  CHECK(plan_with(face).slice(rooted, face, kHome).size() ==
+        static_cast<std::size_t>(kCorridorWidth));
+  CHECK(dig_effort(Material::Root) > dig_effort(Material::Clay));
+  CHECK(dig_effort(Material::Clay) > dig_effort(Material::Soil));
+  CHECK(dig_effort(Material::Stone) == 0);
 
   // Driving at the surface plans nothing above the floor rather than breaking through.
   DigFace upward; upward.anchor = {192, kSurfaceFloor + 1}; upward.heading = {0, -1};

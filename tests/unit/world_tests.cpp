@@ -2,6 +2,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
 namespace {
 
 std::int64_t cargo_total(const ant::sim::World& world) {
@@ -180,4 +185,59 @@ TEST_CASE("sixty simulated minutes stay valid and terminally live", "[world][soa
   CHECK_FALSE(world.extinct());
   CHECK(world.stores().carbohydrate >= 0);
   CHECK(world.stores().protein >= 0);
+}
+
+TEST_CASE("stored food is exactly the heaps lying in the nest", "[world][granary]") {
+  ant::sim::World world(11);
+  world.run_ticks(6'000);
+
+  std::int64_t carbohydrate = 0;
+  std::int64_t protein = 0;
+  std::set<std::pair<int, int>> cells;
+  for (const ant::sim::FoodPile& pile : world.granary()) {
+    CHECK(pile.amount >= 0);
+    CHECK(pile.amount <= ant::sim::kGrainsPerStoreCell);
+    CHECK(world.grid().at(pile.position) == ant::sim::Material::Air);
+    CHECK(cells.insert({pile.position.x, pile.position.y}).second);
+    (pile.nutrient == ant::sim::Nutrient::Carbohydrate ? carbohydrate : protein) += pile.amount;
+  }
+  CHECK(carbohydrate == world.stores().carbohydrate);
+  CHECK(protein == world.stores().protein);
+  // Capacity is the room the colony has actually dug, so it is a whole number of store cells.
+  CHECK(world.stores().carbohydrate_capacity % ant::sim::kGrainsPerStoreCell == 0);
+  CHECK(world.stores().protein_capacity % ant::sim::kGrainsPerStoreCell == 0);
+  CHECK(world.stores().carbohydrate_capacity > 0);
+  CHECK(world.invariant_holds());
+}
+
+TEST_CASE("brood is kept in the ring around the queen", "[world][brood]") {
+  ant::sim::World world(23);
+  world.run_ticks(4'000);
+  REQUIRE_FALSE(world.brood().empty());
+  for (const ant::sim::BroodSnapshot& item : world.brood()) {
+    CAPTURE(item.position.x, item.position.y);
+    const int reach = std::abs(item.position.x - world.home().x) +
+                      std::abs(item.position.y - world.home().y);
+    // Either lying in the nursery, or in transit in a nurse's mandibles.
+    CHECK((reach <= ant::sim::kNurseryRadius || item.carried_by != 0));
+    CHECK(world.grid().passable(item.position));
+  }
+}
+
+TEST_CASE("roots are mined slowly and stone is never mined at all", "[world][dig]") {
+  const auto count = [](const ant::sim::Grid& grid, const ant::sim::Material material) {
+    return std::count(grid.cells().begin(), grid.cells().end(), material);
+  };
+  ant::sim::World world(3);
+  const ant::sim::Grid before = world.grid();
+  REQUIRE(count(before, ant::sim::Material::Stone) > 0);
+  REQUIRE(count(before, ant::sim::Material::Root) > 0);
+
+  world.run_ticks(20'000);
+  CHECK(count(world.grid(), ant::sim::Material::Stone) ==
+        count(before, ant::sim::Material::Stone));
+  // Root costs four times what soil does, so a colony that has dug hundreds of cells has still
+  // only chewed through a handful of them.
+  CHECK(count(world.grid(), ant::sim::Material::Root) <= count(before, ant::sim::Material::Root));
+  CHECK(world.invariant_holds());
 }

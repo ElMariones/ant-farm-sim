@@ -20,6 +20,9 @@ struct UiRect {
 // booleans, so a caller can lift, tint or inset a control smoothly.
 struct WidgetVisual {
   bool hovered{};
+  // Pointer is over the widget whether or not it can be used, so a disabled control can still
+  // explain itself on hover.
+  bool over{};
   bool held{};
   bool clicked{};
   bool enabled{true};

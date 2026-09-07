@@ -9,6 +9,7 @@
 #include <cmath>
 #include <queue>
 #include <stdexcept>
+#include <utility>
 
 namespace ant::sim {
 
@@ -42,7 +43,14 @@ World::World(const std::uint64_t seed, const TraitModifiers traits)
   sources_[0] = {next_id_++, generated.source_positions[0], Nutrient::Carbohydrate, 100'000, 100'000, 0, 800, 20, 20};
   sources_[1] = {next_id_++, generated.source_positions[1], Nutrient::Protein, 100'000, 100'000, 0, 400, 20, 20};
   traits_ = traits;
-  refresh_home_field(); spawn_queen(); spawn_workers(); recompute_needs_and_dig_plan();
+  refresh_home_field(); refresh_zones();
+  // The founding stock is placed in real cells, so the colony starts with visible heaps rather
+  // than a number, and never with more grain than its chambers can hold.
+  const std::int64_t founding_carbohydrate = std::min<std::int64_t>(60'000, stores_.carbohydrate_capacity);
+  const std::int64_t founding_protein = std::min<std::int64_t>(30'000, stores_.protein_capacity);
+  stock_granary(Nutrient::Carbohydrate, founding_carbohydrate);
+  stock_granary(Nutrient::Protein, founding_protein);
+  spawn_queen(); spawn_workers(); recompute_needs_and_dig_plan();
   starting_nest_air_ = connected_nest_air_;
 }
 
@@ -54,7 +62,8 @@ World::World(const WorldSnapshot& snapshot)
       lifecycle_rng_(Pcg32::restore(snapshot.lifecycle_rng_state, snapshot.lifecycle_rng_increment)),
       task_diagnostics_(snapshot.task_diagnostics),
       dig_work_(snapshot.dig_work), brood_(snapshot.brood), corpses_(snapshot.corpses),
-      dropped_food_(snapshot.dropped_food), connected_nest_air_(snapshot.connected_nest_air),
+      dropped_food_(snapshot.dropped_food), granary_(snapshot.granary),
+      connected_nest_air_(snapshot.connected_nest_air),
       starting_nest_air_(snapshot.starting_nest_air), nursery_capacity_(snapshot.nursery_capacity),
       spoil_mound_(snapshot.spoil_mound), next_laying_(snapshot.next_laying),
       queen_starvation_(snapshot.queen_starvation), queen_alive_(snapshot.queen_alive),
@@ -68,6 +77,13 @@ World::World(const WorldSnapshot& snapshot)
   }
   trails_.restore(snapshot.trails);
   refresh_home_field();
+  refresh_zones();
+  // A profile written before food had a place in the nest restores as totals with no heaps. Lay
+  // them out now so the colony continues with the grain it had, sitting where it can be seen.
+  if (granary_.empty() && (stores_.carbohydrate > 0 || stores_.protein > 0)) {
+    stock_granary(Nutrient::Carbohydrate, stores_.carbohydrate);
+    stock_granary(Nutrient::Protein, stores_.protein);
+  }
   for (const ActorState& actor : snapshot.actors) {
     const entt::entity entity = registry_.create();
     registry_.emplace<Identity>(entity, actor.identity);
@@ -139,6 +155,197 @@ void World::refill_sources() {
 }
 void World::refresh_home_field() { if (home_field_.revision() != grid_.navigation_revision()) home_field_.rebuild(grid_, home_); }
 
+void World::refresh_zones() {
+  if (zone_revision_ == grid_.navigation_revision()) return;
+  zone_revision_ = grid_.navigation_revision();
+  nursery_cells_.clear();
+  store_cells_.clear();
+  const std::size_t cell_count = static_cast<std::size_t>(Grid::kWidth * Grid::kHeight);
+  nursery_mask_.assign(cell_count, 0);
+  std::vector<std::uint8_t> visited(cell_count);
+  std::queue<GridPos> queue;
+  queue.push(home_);
+  visited[grid_index(home_)] = 1;
+  while (!queue.empty()) {
+    const GridPos cell = queue.front();
+    queue.pop();
+    const int reach = std::abs(cell.x - home_.x) + std::abs(cell.y - home_.y);
+    if (reach <= kNurseryRadius) {
+      nursery_cells_.push_back(cell);
+      nursery_mask_[grid_index(cell)] = 1;
+    } else {
+      // Only a real room stores food. A three-wide corridor can never reach sixteen open cells in
+      // its five-by-five neighbourhood, so passages stay clear for traffic and chambers fill up.
+      int open = 0;
+      for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+          const GridPos probe{cell.x + dx, cell.y + dy};
+          if (grid_.in_bounds(probe) && grid_.at(probe) == Material::Air) ++open;
+        }
+      }
+      if (open >= 16) store_cells_.push_back(cell);
+    }
+    for (const GridPos step : kNeighbors) {
+      const GridPos next{cell.x + step.x, cell.y + step.y};
+      if (!grid_.in_bounds(next) || visited[grid_index(next)] != 0) continue;
+      if (grid_.at(next) != Material::Air) continue;
+      visited[grid_index(next)] = 1;
+      queue.push(next);
+    }
+  }
+  const auto nearer = [this](const GridPos a, const GridPos b) {
+    const int reach_a = std::abs(a.x - home_.x) + std::abs(a.y - home_.y);
+    const int reach_b = std::abs(b.x - home_.x) + std::abs(b.y - home_.y);
+    return reach_a != reach_b ? reach_a < reach_b : a < b;
+  };
+  std::sort(nursery_cells_.begin(), nursery_cells_.end(), nearer);
+  std::sort(store_cells_.begin(), store_cells_.end(), nearer);
+
+  pile_index_.assign(cell_count, -1);
+  for (std::size_t index = 0; index < granary_.size(); ++index) {
+    pile_index_[grid_index(granary_[index].position)] = static_cast<std::int32_t>(index);
+  }
+  // Capacity is exactly the room the colony has dug. Store cells only ever accumulate — air never
+  // becomes solid inside the nest — so this is monotonic and can never invalidate stored grain,
+  // and it depends on nothing but the grid, so a restored colony computes the same number.
+  const std::int64_t cells = static_cast<std::int64_t>(store_cells_.size());
+  const std::int64_t carbohydrate_cells = cells * 2 / 3;
+  stores_.carbohydrate_capacity = carbohydrate_cells * kGrainsPerStoreCell;
+  stores_.protein_capacity = (cells - carbohydrate_cells) * kGrainsPerStoreCell;
+}
+
+FoodPile* World::pile_at(const GridPos cell) {
+  return const_cast<FoodPile*>(std::as_const(*this).pile_at(cell));
+}
+
+const FoodPile* World::pile_at(const GridPos cell) const {
+  if (!grid_.in_bounds(cell) || pile_index_.empty()) return nullptr;
+  const std::int32_t index = pile_index_[grid_index(cell)];
+  return index < 0 ? nullptr : &granary_[static_cast<std::size_t>(index)];
+}
+
+bool World::in_nursery(const GridPos cell) const {
+  return grid_.in_bounds(cell) && !nursery_mask_.empty() && nursery_mask_[grid_index(cell)] != 0;
+}
+
+bool World::accepts_food(const GridPos cell, const Nutrient nutrient) const {
+  const FoodPile* pile = pile_at(cell);
+  if (pile == nullptr) return grid_.in_bounds(cell) && grid_.at(cell) == Material::Air;
+  return pile->amount == 0 ||
+         (pile->nutrient == nutrient && pile->amount < kGrainsPerStoreCell);
+}
+
+std::optional<GridPos> World::store_target(const Nutrient nutrient, const EntityId bias) const {
+  const std::int64_t allowed = capacity_for(nutrient) / kGrainsPerStoreCell;
+  std::int64_t used = 0;
+  for (const FoodPile& pile : granary_) {
+    if (pile.amount > 0 && pile.nutrient == nutrient) ++used;
+  }
+  // Several near candidates rather than one, so simultaneous deliveries spread over neighbouring
+  // heaps instead of every forager converging on the same cell.
+  constexpr std::size_t kCandidates = 4;
+  std::array<GridPos, kCandidates> topping_up{};
+  std::array<GridPos, kCandidates> empty{};
+  std::size_t partial = 0;
+  std::size_t free = 0;
+  for (const GridPos cell : store_cells_) {
+    const FoodPile* pile = pile_at(cell);
+    if (pile == nullptr || pile->amount == 0) {
+      if (free < kCandidates) empty[free++] = cell;
+    } else if (pile->nutrient == nutrient && pile->amount < kGrainsPerStoreCell) {
+      if (partial < kCandidates) topping_up[partial++] = cell;
+    }
+    if (partial == kCandidates && free == kCandidates) break;
+  }
+  if (partial > 0) return topping_up[static_cast<std::size_t>(bias % partial)];
+  if (used < allowed && free > 0) return empty[static_cast<std::size_t>(bias % free)];
+  return std::nullopt;
+}
+
+std::int64_t World::deposit_food(const GridPos cell, const Nutrient nutrient,
+                                 const std::int64_t amount) {
+  FoodPile* pile = pile_at(cell);
+  if (pile == nullptr) {
+    pile_index_[grid_index(cell)] = static_cast<std::int32_t>(granary_.size());
+    granary_.push_back({cell, nutrient, 0});
+    pile = &granary_.back();
+  }
+  if (pile->amount == 0) pile->nutrient = nutrient;
+  if (pile->nutrient != nutrient) return 0;
+  const std::int64_t placed = std::min(amount, kGrainsPerStoreCell - pile->amount);
+  pile->amount += placed;
+  store_for(nutrient) += placed;
+  return placed;
+}
+
+void World::stock_granary(const Nutrient nutrient, std::int64_t amount) {
+  for (FoodPile& pile : granary_) {
+    if (pile.nutrient == nutrient) pile.amount = 0;
+  }
+  store_for(nutrient) = 0;
+  while (amount > 0) {
+    const std::optional<GridPos> cell = store_target(nutrient, 0);
+    if (!cell) break;
+    const std::int64_t placed = deposit_food(*cell, nutrient, amount);
+    if (placed <= 0) break;
+    amount -= placed;
+  }
+}
+
+std::optional<GridPos> World::nursery_target(const EntityId ignore_brood) const {
+  for (const GridPos cell : nursery_cells_) {
+    if (cell == home_) continue; // the queen's own cell stays clear
+    const bool taken = std::any_of(brood_.begin(), brood_.end(), [&](const BroodSnapshot& item) {
+      return item.id != ignore_brood && item.carried_by == 0 && item.position == cell;
+    });
+    if (!taken) return cell;
+  }
+  return std::nullopt;
+}
+
+void World::store_cargo(const entt::entity entity, int& path_budget) {
+  Cargo& cargo = registry_.get<Cargo>(entity);
+  Forager& forager = registry_.get<Forager>(entity);
+  Movement& movement = registry_.get<Movement>(entity);
+  if (cargo.kind != CargoKind::Food || cargo.amount <= 0) {
+    cargo = Cargo{};
+    forager.state = ForageState::AtHome;
+    forager.source_index = -1;
+    clear_path(movement);
+    return;
+  }
+  // Keep walking to the heap this load was assigned, and only look for another once that heap can
+  // no longer take it.
+  if (!accepts_food(forager.store_cell, cargo.nutrient)) {
+    const std::optional<GridPos> cell =
+        store_target(cargo.nutrient, registry_.get<Identity>(entity).id);
+    if (!cell) {
+      forager.state = ForageState::WaitingForStorage;
+      clear_path(movement);
+      return;
+    }
+    forager.store_cell = *cell;
+    clear_path(movement);
+  }
+  if (registry_.get<Position>(entity).cell() != forager.store_cell) {
+    route_to(entity, forager.store_cell, path_budget);
+    return;
+  }
+  const std::int64_t placed = deposit_food(forager.store_cell, cargo.nutrient, cargo.amount);
+  cargo.amount -= placed;
+  carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= placed;
+  stats_.delivered += placed;
+  if (placed > 0) ++stats_.productive_worker_ticks;
+  if (cargo.amount == 0) {
+    cargo.kind = CargoKind::None;
+    forager.state = ForageState::AtHome;
+    forager.source_index = -1;
+    ++stats_.completed_round_trips;
+    clear_path(movement);
+  }
+}
+
+
 void World::step() {
   refill_sources(); refresh_home_field();
   for (const entt::entity e : ordered_entities_) { Position& p = registry_.get<Position>(e); p.previous_x_subcells = p.x_subcells; p.previous_y_subcells = p.y_subcells; }
@@ -153,6 +360,7 @@ void World::step() {
 void World::run_ticks(const Tick count) { for (Tick i = 0; i < count; ++i) step(); }
 
 void World::recompute_needs_and_dig_plan() {
+  refresh_zones();
   if (frontier_revision_ != grid_.navigation_revision()) {
     frontier_revision_ = grid_.navigation_revision();
     std::vector<std::uint8_t> visited(static_cast<std::size_t>(Grid::kWidth * Grid::kHeight)); std::queue<GridPos> queue;
@@ -168,15 +376,15 @@ void World::recompute_needs_and_dig_plan() {
       // has somewhere to come from.
       if (touches_ground && within_envelope(p, home_)) dig_candidates_.push_back(p);
     }
-    nursery_capacity_ = std::max(12, connected_nest_air_ / 4);
-    if (starting_nest_air_ > 0) {
-      const std::int64_t additional = std::max(0, connected_nest_air_ - starting_nest_air_);
-      stores_.carbohydrate_capacity = std::min<std::int64_t>(20'000'000, 200'000 + 2'000 * additional);
-      stores_.protein_capacity = std::min<std::int64_t>(20'000'000, 100'000 + 1'000 * additional);
-    }
   }
+  // Brood needs a cradle, so the nursery is no larger than the cells that exist around the queen.
+  nursery_capacity_ =
+      std::max(12, std::min(connected_nest_air_ / 4, static_cast<int>(nursery_cells_.size())));
+  // A chamber is dug when the colony is out of room for brood or for grain, which is what turns a
+  // full larder into new excavation rather than idle workers.
   const bool wants_chamber = brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ||
-                             stores_.carbohydrate * 4 >= stores_.carbohydrate_capacity * 3;
+                             stores_.carbohydrate * 4 >= stores_.carbohydrate_capacity * 3 ||
+                             stores_.protein * 4 >= stores_.protein_capacity * 3;
   dig_plan_.update(grid_, home_, seed_, dig_candidates_, wants_chamber);
   const auto shortage = [](const std::int64_t amount, const std::int64_t target) { return amount >= target ? std::uint16_t{0} : static_cast<std::uint16_t>(((target - amount) * 1'000) / target); };
   task_diagnostics_.stimuli[0] = std::max(shortage(stores_.carbohydrate, stores_.carbohydrate_capacity / 2), shortage(stores_.protein, stores_.protein_capacity / 2));
@@ -234,9 +442,11 @@ void World::process_forager(const entt::entity e, int& path_budget) {
   Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); Cargo& cargo = registry_.get<Cargo>(e);
   if (f.state == ForageState::ToSource && f.reserved_amount > 0 && tick_ >= f.reservation_expiry) { release_reservation(f); clear_path(m); f.state = ForageState::AtHome; f.retry_after = tick_ + 200; }
   if (f.state == ForageState::WaitingForStorage) {
-    const std::int64_t delivered = std::min(capacity_for(cargo.nutrient) - store_for(cargo.nutrient), cargo.amount); store_for(cargo.nutrient) += delivered; cargo.amount -= delivered; carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= delivered; stats_.delivered += delivered;
-    if (cargo.amount == 0) { cargo.kind = CargoKind::None; f.state = ForageState::AtHome; ++stats_.completed_round_trips; } return;
+    // Holds the load until a chamber has room again, rather than dissolving it into a counter.
+    if (!store_target(cargo.nutrient, registry_.get<Identity>(e).id)) return;
+    f.state = ForageState::Storing;
   }
+  if (f.state == ForageState::Storing) { store_cargo(e, path_budget); return; }
   if (f.state == ForageState::AtHome) {
     if (cargo.amount > 0) { f.state = ForageState::Returning; m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell(), bias_for(e)); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); }
     else if (tick_ >= f.retry_after) choose_source(e, path_budget);
@@ -324,8 +534,9 @@ void World::arrive(const entt::entity e, int&) {
     m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell(), bias_for(e)); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); return;
   }
   if (f.state == ForageState::Returning) {
-    const std::int64_t delivered = std::min(capacity_for(cargo.nutrient) - store_for(cargo.nutrient), cargo.amount); store_for(cargo.nutrient) += delivered; cargo.amount -= delivered; carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= delivered; stats_.delivered += delivered; clear_path(m);
-    if (cargo.amount > 0) f.state = ForageState::WaitingForStorage; else { cargo.kind = CargoKind::None; f.state = ForageState::AtHome; f.source_index = -1; ++stats_.completed_round_trips; }
+    // Home is only the hall: the load still has to be carried on to the heap it belongs on.
+    clear_path(m);
+    f.state = ForageState::Storing;
   }
 }
 
@@ -346,11 +557,17 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
     if (const auto claimed = dig_plan_.claim(grid_, home_)) {
       mind.target = claimed->cell;
       mind.has_target = true;
+      // Stay committed long enough to actually get there and take a bite. A face at the far end of
+      // the nest is a ten-second walk, and a worker that reconsidered every five seconds turned
+      // back before it ever arrived; a face next door still costs nothing extra.
+      const GridPos here = registry_.get<Position>(e).cell();
+      const int reach = std::abs(claimed->cell.x - here.x) + std::abs(claimed->cell.y - here.y);
+      mind.committed_until = tick_ + static_cast<Tick>(5 + reach / 6) * kTicksPerSecond;
     }
   }
   if (!mind.has_target) return; const GridPos current = registry_.get<Position>(e).cell(); GridPos work = current; bool adjacent = false;
   for (const GridPos d : kNeighbors) { const GridPos candidate{mind.target.x + d.x, mind.target.y + d.y}; if (grid_.walkable(candidate)) { work = candidate; adjacent = candidate == current; if (adjacent) break; } }
-  if (!adjacent) { route_to(e, work, path_budget); return; } if (++mind.action_ticks < 10) return; mind.action_ticks = 0; std::uint16_t& remaining = dig_work_[grid_index(mind.target)]; if (remaining == 0) remaining = grid_.at(mind.target) == Material::Clay ? 2'500 : 1'000;
+  if (!adjacent) { route_to(e, work, path_budget); return; } if (++mind.action_ticks < 10) return; mind.action_ticks = 0; std::uint16_t& remaining = dig_work_[grid_index(mind.target)]; if (remaining == 0) remaining = dig_effort(grid_.at(mind.target));
   const std::uint16_t dig_amount = static_cast<std::uint16_t>(
       (100 + 25 * adaptation_levels_[0]) * (traits_.industry_tier >= 1 ? 115 : 100) / 100);
   ++stats_.productive_worker_ticks;
@@ -359,7 +576,30 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
 }
 
 void World::process_nurse(const entt::entity e, int& path_budget) {
-  if (registry_.get<Position>(e).cell() != home_) { route_to(e, home_, path_budget); return; } WorkerMind& mind = registry_.get<WorkerMind>(e); if (++mind.action_ticks < kTicksPerSecond) return; mind.action_ticks = 0; if (brood_.empty()) return;
+  const EntityId id = registry_.get<Identity>(e).id;
+  const GridPos here = registry_.get<Position>(e).cell();
+  // Carrying an egg: walk it to a free cradle and set it down there.
+  const auto carried = std::find_if(brood_.begin(), brood_.end(),
+      [id](const BroodSnapshot& item) { return item.carried_by == id; });
+  if (carried != brood_.end()) {
+    carried->position = here;
+    const std::optional<GridPos> cradle = nursery_target(carried->id);
+    if (!cradle) { carried->carried_by = 0; return; }
+    if (here != *cradle) { route_to(e, *cradle, path_budget); return; }
+    carried->carried_by = 0;
+    ++stats_.productive_worker_ticks;
+    return;
+  }
+  // Brood that has ended up outside the ring around the queen is fetched back before any tending.
+  const auto stray = std::find_if(brood_.begin(), brood_.end(), [this](const BroodSnapshot& item) {
+    return item.carried_by == 0 && !in_nursery(item.position);
+  });
+  if (stray != brood_.end() && nursery_target(stray->id)) {
+    if (here != stray->position) { route_to(e, stray->position, path_budget); return; }
+    stray->carried_by = id;
+    return;
+  }
+  if (here != home_) { route_to(e, home_, path_budget); return; } WorkerMind& mind = registry_.get<WorkerMind>(e); if (++mind.action_ticks < kTicksPerSecond) return; mind.action_ticks = 0; if (brood_.empty()) return;
   auto item = std::min_element(brood_.begin(), brood_.end(), [](const BroodSnapshot& a, const BroodSnapshot& b) { return a.care_remaining != b.care_remaining ? a.care_remaining < b.care_remaining : a.id < b.id; });
   if (item->care_remaining < 5 * kTicksPerSecond) { item->care_remaining = 5 * kTicksPerSecond; ++stats_.productive_worker_ticks; }
 }
@@ -397,7 +637,23 @@ void World::deliver_non_food(const entt::entity e) {
   if (cargo.kind == CargoKind::Spoil) { if (deposit_spoil()) ++spoil_mound_; else ++stats_.spoil_overflow; ++stats_.spoil_delivered; } else if (cargo.kind == CargoKind::Corpse) ++stats_.corpses_cleaned; cargo = Cargo{}; clear_path(m);
 }
 
-bool World::consume(const Nutrient nutrient, const std::int64_t amount) { std::int64_t& store = store_for(nutrient); if (store < amount) return false; store -= amount; if (nutrient == Nutrient::Carbohydrate) stats_.consumed_carbohydrate += amount; else stats_.consumed_protein += amount; return true; }
+bool World::consume(const Nutrient nutrient, const std::int64_t amount) {
+  std::int64_t& store = store_for(nutrient);
+  if (store < amount) return false;
+  store -= amount;
+  // Eaten out of the nearest heaps first, so the chambers by the queen empty before the far ones.
+  std::int64_t remaining = amount;
+  for (FoodPile& pile : granary_) {
+    if (remaining <= 0) break;
+    if (pile.nutrient != nutrient || pile.amount <= 0) continue;
+    const std::int64_t taken = std::min(remaining, pile.amount);
+    pile.amount -= taken;
+    remaining -= taken;
+  }
+  if (nutrient == Nutrient::Carbohydrate) stats_.consumed_carbohydrate += amount;
+  else stats_.consumed_protein += amount;
+  return true;
+}
 Tick World::brood_target(const BroodStage stage, const BroodRole role) const {
   Tick base = stage == BroodStage::Egg ? 30 * kTicksPerSecond
             : stage == BroodStage::Larva ? 60 * kTicksPerSecond : 45 * kTicksPerSecond;
@@ -440,7 +696,9 @@ void World::update_biology() {
       // One in five, and only while live winged queens plus winged brood stay under ten.
       if (egg_assignment_counter_ % 5 == 0 && live_winged_queens() + winged_brood() < 10) role = BroodRole::Gyne;
     }
-    brood_.push_back({next_id_++, BroodStage::Egg, {home_.x + static_cast<int>(stats_.eggs_laid % 7) - 3, home_.y + static_cast<int>((stats_.eggs_laid / 7) % 3) - 1}, 0, brood_target(BroodStage::Egg, role), 0, 0, role}); ++stats_.eggs_laid; } }
+    const GridPos cradle = nursery_target(0).value_or(home_);
+    brood_.push_back({next_id_++, BroodStage::Egg, cradle, 0, brood_target(BroodStage::Egg, role), 0, 0, role, 0});
+    ++stats_.eggs_laid; } }
   remove_dead_workers(); for (CorpseSnapshot& corpse : corpses_) { corpse.age += kTicksPerSecond; corpse.cleanable = corpse.age >= 30 * kTicksPerSecond; }
   corpses_.erase(std::remove_if(corpses_.begin(), corpses_.end(), [](const CorpseSnapshot& c) { return c.age >= 300 * kTicksPerSecond; }), corpses_.end());
   for (DroppedCargoSnapshot& dropped : dropped_food_) dropped.age += kTicksPerSecond;
@@ -543,10 +801,25 @@ int World::winged_brood() const {
 void World::remove_dead_workers() {
   std::vector<entt::entity> dead;
   for (const entt::entity e : ordered_entities_) if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); if (life.age < life.lifespan && life.starvation < 120 * kTicksPerSecond) continue; const Cargo cargo = registry_.get<Cargo>(e); const GridPos p = registry_.get<Position>(e).cell(); if (cargo.kind == CargoKind::Corpse) corpses_.push_back({cargo.entity_id, p, 30 * kTicksPerSecond, true}); else if (cargo.kind == CargoKind::Food && cargo.amount > 0) { dropped_food_.push_back({next_id_++, p, cargo.nutrient, cargo.amount, 0}); carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= cargo.amount; } corpses_.push_back({registry_.get<Identity>(e).id, p, 0, false}); if (registry_.all_of<Forager>(e)) release_reservation(registry_.get<Forager>(e)); dead.push_back(e); ++stats_.deaths; }
-  for (const entt::entity e : dead) registry_.destroy(e); ordered_entities_.erase(std::remove_if(ordered_entities_.begin(), ordered_entities_.end(), [&dead](const entt::entity e) { return std::find(dead.begin(), dead.end(), e) != dead.end(); }), ordered_entities_.end());
+  for (const entt::entity e : dead) {
+    const EntityId id = registry_.get<Identity>(e).id;
+    for (BroodSnapshot& item : brood_) if (item.carried_by == id) item.carried_by = 0;
+    registry_.destroy(e);
+  }
+  ordered_entities_.erase(std::remove_if(ordered_entities_.begin(), ordered_entities_.end(), [&dead](const entt::entity e) { return std::find(dead.begin(), dead.end(), e) != dead.end(); }), ordered_entities_.end());
 }
 
-void World::update_trails() { for (const entt::entity e : ordered_entities_) if (registry_.all_of<Forager>(e) && registry_.get<Forager>(e).state == ForageState::Returning) trails_.deposit(registry_.get<Position>(e).cell(), 900); trails_.update(grid_); }
+// A loaded forager marks its route the whole way in, from the source to the heap she sets the load
+// down on, so the trail survives the leg through the nest as well as the walk home.
+void World::update_trails() {
+  for (const entt::entity e : ordered_entities_) {
+    if (!registry_.all_of<Forager>(e)) continue;
+    const ForageState state = registry_.get<Forager>(e).state;
+    if (state != ForageState::Returning && state != ForageState::Storing) continue;
+    trails_.deposit(registry_.get<Position>(e).cell(), 900);
+  }
+  trails_.update(grid_);
+}
 
 std::int64_t& World::store_for(const Nutrient n) { return n == Nutrient::Carbohydrate ? stores_.carbohydrate : stores_.protein; }
 std::int64_t World::store_for(const Nutrient n) const { return n == Nutrient::Carbohydrate ? stores_.carbohydrate : stores_.protein; }
@@ -568,6 +841,7 @@ WorldSnapshot World::snapshot() const {
   out.lifecycle_rng_state = lifecycle_rng_.state(); out.lifecycle_rng_increment = lifecycle_rng_.increment();
   out.trails = trails_.cells(); out.dig_work = dig_work_; out.task_diagnostics = task_diagnostics_;
   out.dig_faces = dig_plan_.save(); out.brood = brood_; out.corpses = corpses_; out.dropped_food = dropped_food_;
+  out.granary = granary_;
   out.spoil_mound = spoil_mound_; out.starting_nest_air = starting_nest_air_;
   out.connected_nest_air = connected_nest_air_; out.nursery_capacity = nursery_capacity_;
   out.next_laying = next_laying_; out.queen_starvation = queen_starvation_;
@@ -592,7 +866,8 @@ std::uint64_t World::canonical_hash() const {
   std::uint64_t hash = 1469598103934665603ULL; hash_value(hash, seed_); hash_value(hash, tick_); hash_value(hash, grid_.material_hash()); hash_value(hash, behavior_rng_.state()); hash_value(hash, lifecycle_rng_.state()); hash_signed(hash, stores_.carbohydrate); hash_signed(hash, stores_.protein); hash_value(hash, trails_.mass()); hash_value(hash, queen_alive_); hash_value(hash, queen_starvation_); hash_value(hash, static_cast<std::uint64_t>(focus_));
   for (const FoodSource& source : sources_) { hash_signed(hash, source.amount); hash_signed(hash, source.reserved); hash_value(hash, source.next_refill); }
   for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); hash_value(hash, id.id); hash_value(hash, static_cast<std::uint64_t>(p.x_subcells)); hash_value(hash, static_cast<std::uint64_t>(p.y_subcells)); hash_signed(hash, cargo.amount); if (registry_.all_of<WorkerMind>(e)) { const WorkerMind& mind = registry_.get<WorkerMind>(e); hash_value(hash, static_cast<std::uint64_t>(mind.task)); hash_value(hash, mind.committed_until); } if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); hash_value(hash, life.age); hash_value(hash, life.lifespan); hash_value(hash, life.starvation); } }
-  for (const BroodSnapshot& b : brood_) { hash_value(hash, b.id); hash_value(hash, static_cast<std::uint64_t>(b.stage)); hash_value(hash, static_cast<std::uint64_t>(b.role)); hash_value(hash, b.progress); hash_value(hash, b.starvation); } for (const CorpseSnapshot& c : corpses_) { hash_value(hash, c.id); hash_value(hash, c.age); } for (const DroppedCargoSnapshot& dropped : dropped_food_) { hash_value(hash, dropped.id); hash_signed(hash, dropped.amount); hash_value(hash, dropped.age); }
+  for (const BroodSnapshot& b : brood_) { hash_value(hash, b.id); hash_value(hash, static_cast<std::uint64_t>(b.stage)); hash_value(hash, static_cast<std::uint64_t>(b.role)); hash_value(hash, b.progress); hash_value(hash, b.starvation); hash_signed(hash, b.position.x); hash_signed(hash, b.position.y); hash_value(hash, b.carried_by); }
+  for (const FoodPile& pile : granary_) { hash_signed(hash, pile.position.x); hash_signed(hash, pile.position.y); hash_value(hash, static_cast<std::uint64_t>(pile.nutrient)); hash_signed(hash, pile.amount); } for (const CorpseSnapshot& c : corpses_) { hash_value(hash, c.id); hash_value(hash, c.age); } for (const DroppedCargoSnapshot& dropped : dropped_food_) { hash_value(hash, dropped.id); hash_signed(hash, dropped.amount); hash_value(hash, dropped.age); }
   hash_signed(hash, stats_.delivered); hash_value(hash, stats_.cells_excavated); hash_value(hash, stats_.workers_born); hash_value(hash, stats_.deaths); hash_value(hash, stats_.productive_worker_ticks); hash_value(hash, stats_.gynes_born); for (const auto level : adaptation_levels_) hash_value(hash, level); hash_value(hash, traits_.vigor_tier); hash_value(hash, traits_.industry_tier); hash_value(hash, mature_); hash_value(hash, egg_assignment_counter_);
   for (const DigFace& face : dig_plan_.faces()) { hash_value(hash, face.active); if (!face.active) continue; hash_signed(hash, face.anchor.x); hash_signed(hash, face.anchor.y); hash_signed(hash, face.heading.x); hash_signed(hash, face.heading.y); hash_value(hash, face.length); hash_value(hash, face.chamber); }
   return hash;
@@ -602,13 +877,20 @@ bool World::invariant_holds() const {
   if (stores_.carbohydrate < 0 || stores_.protein < 0 || stores_.carbohydrate > stores_.carbohydrate_capacity || stores_.protein > stores_.protein_capacity) return false; std::array<std::int64_t, 2> reserved{}; EntityId previous = 0;
   for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); if (id.id <= previous || !grid_.passable(p.cell()) || cargo.amount < 0) return false; previous = id.id; if (registry_.all_of<Forager>(e)) { const Forager& f = registry_.get<Forager>(e); if (f.reserved_amount < 0) return false; if (f.source_index >= 0) reserved[static_cast<std::size_t>(f.source_index)] += f.reserved_amount; } }
   for (std::size_t i = 0; i < sources_.size(); ++i) if (sources_[i].amount < 0 || sources_[i].amount > sources_[i].capacity || sources_[i].reserved != reserved[i] || sources_[i].reserved > sources_[i].amount) return false;
+  // Stored food is the sum of the heaps in the nest: the counter can never hold grain no cell does.
+  std::array<std::int64_t, 2> stored{};
+  for (const FoodPile& pile : granary_) {
+    if (pile.amount < 0 || pile.amount > kGrainsPerStoreCell || !grid_.passable(pile.position)) return false;
+    stored[static_cast<std::size_t>(pile.nutrient)] += pile.amount;
+  }
+  if (stored[0] != stores_.carbohydrate || stored[1] != stores_.protein) return false;
   return brood_.size() <= 5'000 &&
          ordered_entities_.size() + brood_.size() + corpses_.size() + dropped_food_.size() <= 20'000;
 }
 
 void World::debug_set_source_amount(const std::size_t i, const std::int64_t amount) { FoodSource& source = sources_.at(i); if (amount < 0 || amount > source.capacity) throw std::out_of_range("source amount outside capacity"); source.amount = amount; }
 void World::debug_set_source_refill(const std::size_t i, const std::int64_t amount) { if (amount < 0) throw std::out_of_range("source refill cannot be negative"); sources_.at(i).refill_amount = amount; }
-void World::debug_set_store(const Nutrient n, const std::int64_t amount) { if (amount < 0 || amount > capacity_for(n)) throw std::out_of_range("store amount outside capacity"); store_for(n) = amount; }
+void World::debug_set_store(const Nutrient n, const std::int64_t amount) { if (amount < 0 || amount > capacity_for(n)) throw std::out_of_range("store amount outside capacity"); stock_granary(n, amount); }
 void World::debug_set_worker_lifespan(const EntityId id, const Tick lifespan) { for (const entt::entity e : ordered_entities_) if (registry_.get<Identity>(e).id == id && registry_.all_of<Life>(e)) registry_.get<Life>(e).lifespan = lifespan; }
 void World::debug_spawn_brood(const BroodStage stage, const Tick progress, const Tick starvation, const BroodRole role) { brood_.push_back({next_id_++, stage, home_, progress, brood_target(stage, role), 0, starvation, role}); }
 void World::debug_spawn_workers(const int count) { for (int i = 0; i < count; ++i) spawn_worker(home_); }

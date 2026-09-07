@@ -8,7 +8,8 @@
 
 namespace ant::sim {
 
-enum class Material : std::uint8_t { Sky, Air, Soil, Clay, Root, Bedrock };
+// Stone is appended rather than inserted: the numeric values are the save format.
+enum class Material : std::uint8_t { Sky, Air, Soil, Clay, Root, Bedrock, Stone };
 
 class Grid {
 public:
@@ -47,6 +48,9 @@ private:
 };
 
 [[nodiscard]] bool is_passable(Material material);
+// Roots and clay are diggable but slower than plain soil; stone and bedrock never are.
 [[nodiscard]] bool is_diggable(Material material);
+// Grains of work one cell of this material takes to remove.
+[[nodiscard]] std::uint16_t dig_effort(Material material);
 
 } // namespace ant::sim

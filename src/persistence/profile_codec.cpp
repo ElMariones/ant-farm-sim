@@ -118,7 +118,7 @@ json actor_json(const sim::ActorState& a) {
   if (a.worker) {
     json path=json::array(); for (const auto p:a.movement.path) path.push_back(position_json(p));
     result["movement"]={{"path",std::move(path)},{"next_cell",a.movement.next_cell},{"path_revision",a.movement.path_revision},{"speed_residual",a.movement.speed_residual},{"path_valid",a.path_valid}};
-    result["forager"]={{"state",enum_value(a.forager.state)},{"source_index",a.forager.source_index},{"reserved_amount",a.forager.reserved_amount},{"reservation_expiry",a.forager.reservation_expiry},{"retry_after",a.forager.retry_after}};
+    result["forager"]={{"state",enum_value(a.forager.state)},{"source_index",a.forager.source_index},{"reserved_amount",a.forager.reserved_amount},{"reservation_expiry",a.forager.reservation_expiry},{"retry_after",a.forager.retry_after},{"store_cell",position_json(a.forager.store_cell)}};
     result["mind"]={{"task",enum_value(a.mind.task)},{"committed_until",a.mind.committed_until},{"thresholds",a.mind.thresholds},{"target",position_json(a.mind.target)},{"has_target",a.mind.has_target},{"action_ticks",a.mind.action_ticks}};
     result["life"]={{"age",a.life.age},{"lifespan",a.life.lifespan},{"starvation",a.life.starvation}};
   } else if (a.ant.kind == sim::AntKind::WingedQueen) {
@@ -134,7 +134,7 @@ sim::ActorState read_actor(const json& j) {
   const auto& c=j.at("cargo"); a.cargo={read_enum<sim::CargoKind>(c.at("kind"),3,"cargo kind"),read_enum<sim::Nutrient>(c.at("nutrient"),1,"cargo nutrient"),c.at("amount").get<std::int64_t>(),c.at("entity_id").get<sim::EntityId>()};
   if (a.worker) {
     const auto& m=j.at("movement"); for(const auto& item:m.at("path")) a.movement.path.push_back(read_position(item)); a.movement.next_cell=m.at("next_cell").get<std::size_t>(); a.movement.path_revision=m.at("path_revision").get<std::uint64_t>(); a.path_valid=m.value("path_valid",true); a.movement.speed_residual=m.at("speed_residual").get<int>();
-    const auto& f=j.at("forager"); a.forager={read_enum<sim::ForageState>(f.at("state"),3,"forage state"),f.at("source_index").get<int>(),f.at("reserved_amount").get<std::int64_t>(),f.at("reservation_expiry").get<sim::Tick>(),f.at("retry_after").get<sim::Tick>()};
+    const auto& f=j.at("forager"); a.forager={read_enum<sim::ForageState>(f.at("state"),4,"forage state"),f.at("source_index").get<int>(),f.at("reserved_amount").get<std::int64_t>(),f.at("reservation_expiry").get<sim::Tick>(),f.at("retry_after").get<sim::Tick>(),f.contains("store_cell")?read_position(f.at("store_cell")):sim::GridPos{}};
     const auto& mind=j.at("mind"); a.mind.task=read_enum<sim::Task>(mind.at("task"),4,"task"); a.mind.committed_until=mind.at("committed_until").get<sim::Tick>(); a.mind.thresholds=mind.at("thresholds").get<std::array<std::uint16_t,4>>(); a.mind.target=read_position(mind.at("target")); a.mind.has_target=mind.at("has_target").get<bool>(); a.mind.action_ticks=mind.at("action_ticks").get<int>();
     const auto& life=j.at("life"); a.life={life.at("age").get<sim::Tick>(),life.at("lifespan").get<sim::Tick>(),life.at("starvation").get<sim::Tick>()};
   } else if (a.ant.kind == sim::AntKind::WingedQueen) {
@@ -146,10 +146,11 @@ sim::ActorState read_actor(const json& j) {
 json world_json(const sim::WorldSnapshot& w) {
   json terrain=json::array(); for(const auto value:w.terrain) terrain.push_back(enum_value(value));
   json sources=json::array(); for(const auto& source:w.sources) sources.push_back(source_json(source));
-  json brood=json::array(); for(const auto& b:w.brood) brood.push_back({{"id",b.id},{"stage",enum_value(b.stage)},{"position",position_json(b.position)},{"progress",b.progress},{"target",b.target},{"care_remaining",b.care_remaining},{"starvation",b.starvation},{"role",enum_value(b.role)}});
+  json brood=json::array(); for(const auto& b:w.brood) brood.push_back({{"id",b.id},{"stage",enum_value(b.stage)},{"position",position_json(b.position)},{"progress",b.progress},{"target",b.target},{"care_remaining",b.care_remaining},{"starvation",b.starvation},{"role",enum_value(b.role)},{"carried_by",b.carried_by}});
   json corpses=json::array(); for(const auto& c:w.corpses) corpses.push_back({{"id",c.id},{"position",position_json(c.position)},{"age",c.age},{"cleanable",c.cleanable}});
   json dropped=json::array(); for(const auto& d:w.dropped_food) dropped.push_back({{"id",d.id},{"position",position_json(d.position)},{"nutrient",enum_value(d.nutrient)},{"amount",d.amount},{"age",d.age}});
   json actors=json::array(); for(const auto& a:w.actors) actors.push_back(actor_json(a));
+  json granary=json::array(); for(const auto& g:w.granary) granary.push_back({{"position",position_json(g.position)},{"nutrient",enum_value(g.nutrient)},{"amount",g.amount}});
   json dig_faces=json::array(); for(const auto& f:w.dig_faces) dig_faces.push_back({{"anchor",position_json(f.anchor)},{"heading",position_json(f.heading)},{"length",f.length},{"blocked",f.blocked},{"chamber",f.chamber}});
   return {{"seed",w.seed},{"tick",w.tick},{"next_id",w.next_id},{"home",position_json(w.home)},
     {"terrain",std::move(terrain)},{"sources",std::move(sources)},
@@ -158,7 +159,7 @@ json world_json(const sim::WorldSnapshot& w) {
     {"rng",{{"behavior_state",w.behavior_rng_state},{"behavior_increment",w.behavior_rng_increment},{"lifecycle_state",w.lifecycle_rng_state},{"lifecycle_increment",w.lifecycle_rng_increment}}},
     {"trails",w.trails},{"dig_work",w.dig_work},
     {"task_diagnostics",{{"stimuli",w.task_diagnostics.stimuli},{"workers_by_task",w.task_diagnostics.workers_by_task}}},
-    {"dig_faces",std::move(dig_faces)},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"actors",std::move(actors)},
+    {"dig_faces",std::move(dig_faces)},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"granary",std::move(granary)},{"actors",std::move(actors)},
     {"spoil_mound",w.spoil_mound},{"starting_nest_air",w.starting_nest_air},{"connected_nest_air",w.connected_nest_air},{"nursery_capacity",w.nursery_capacity},
     {"next_laying",w.next_laying},{"queen_starvation",w.queen_starvation},{"queen_alive",w.queen_alive},{"decline",w.decline},{"extinct",w.extinct},
     {"focus",enum_value(w.focus)},{"adaptation_levels",w.adaptation_levels},
@@ -168,7 +169,7 @@ json world_json(const sim::WorldSnapshot& w) {
 
 sim::WorldSnapshot read_world(const json& j) {
   sim::WorldSnapshot w; w.seed=j.at("seed").get<std::uint64_t>(); w.tick=j.at("tick").get<sim::Tick>(); w.next_id=j.at("next_id").get<sim::EntityId>(); w.home=read_position(j.at("home"));
-  const auto& terrain=j.at("terrain"); if(!terrain.is_array()||terrain.size()!=static_cast<std::size_t>(sim::Grid::kWidth*sim::Grid::kHeight)) throw std::invalid_argument("terrain array has wrong size"); w.terrain.reserve(terrain.size()); for(const auto& item:terrain) w.terrain.push_back(read_enum<sim::Material>(item,5,"material"));
+  const auto& terrain=j.at("terrain"); if(!terrain.is_array()||terrain.size()!=static_cast<std::size_t>(sim::Grid::kWidth*sim::Grid::kHeight)) throw std::invalid_argument("terrain array has wrong size"); w.terrain.reserve(terrain.size()); for(const auto& item:terrain) w.terrain.push_back(read_enum<sim::Material>(item,6,"material"));
   const auto& sources=j.at("sources"); if(!sources.is_array()||sources.size()!=2) throw std::invalid_argument("two food sources required"); for(std::size_t i=0;i<2;++i) w.sources[i]=read_source(sources[i]);
   const auto& stores=j.at("stores"); w.stores={stores.at("carbohydrate").get<std::int64_t>(),stores.at("protein").get<std::int64_t>(),stores.at("carbohydrate_capacity").get<std::int64_t>(),stores.at("protein_capacity").get<std::int64_t>()};
   w.stats=read_stats(j.at("stats")); const auto& rng=j.at("rng"); w.behavior_rng_state=rng.at("behavior_state").get<std::uint64_t>(); w.behavior_rng_increment=rng.at("behavior_increment").get<std::uint64_t>(); w.lifecycle_rng_state=rng.at("lifecycle_state").get<std::uint64_t>(); w.lifecycle_rng_increment=rng.at("lifecycle_increment").get<std::uint64_t>();
@@ -177,9 +178,12 @@ sim::WorldSnapshot read_world(const json& j) {
   // Saves written before excavation had persistent faces simply carry none; the plan reseeds them
   // from the grid on the next survey, which loses no history a face was holding.
   if(j.contains("dig_faces")) for(const auto& item:j.at("dig_faces")) { sim::DigFace face; face.anchor=read_position(item.at("anchor")); face.heading=read_position(item.at("heading")); face.length=item.at("length").get<std::uint16_t>(); face.blocked=item.at("blocked").get<std::uint16_t>(); face.chamber=item.at("chamber").get<bool>(); face.active=true; if(w.dig_faces.size()<sim::kMaxDigFaces && std::abs(face.heading.x)+std::abs(face.heading.y)==1) w.dig_faces.push_back(face); }
-  for(const auto& item:j.at("brood")) w.brood.push_back({item.at("id").get<sim::EntityId>(),read_enum<sim::BroodStage>(item.at("stage"),2,"brood stage"),read_position(item.at("position")),item.at("progress").get<sim::Tick>(),item.at("target").get<sim::Tick>(),item.at("care_remaining").get<sim::Tick>(),item.at("starvation").get<sim::Tick>(),read_enum<sim::BroodRole>(item.at("role"),1,"brood role")});
+  for(const auto& item:j.at("brood")) w.brood.push_back({item.at("id").get<sim::EntityId>(),read_enum<sim::BroodStage>(item.at("stage"),2,"brood stage"),read_position(item.at("position")),item.at("progress").get<sim::Tick>(),item.at("target").get<sim::Tick>(),item.at("care_remaining").get<sim::Tick>(),item.at("starvation").get<sim::Tick>(),read_enum<sim::BroodRole>(item.at("role"),1,"brood role"),item.value("carried_by",sim::EntityId{0})});
   for(const auto& item:j.at("corpses")) w.corpses.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),item.at("age").get<sim::Tick>(),item.at("cleanable").get<bool>()});
   for(const auto& item:j.at("dropped_food")) w.dropped_food.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),read_enum<sim::Nutrient>(item.at("nutrient"),1,"nutrient"),item.at("amount").get<std::int64_t>(),item.at("age").get<sim::Tick>()});
+  // Saves written before food had a place in the nest carry no granary; the world rebuilds one
+  // from the stored totals on load, so nothing is lost and nothing is duplicated.
+  if(j.contains("granary")) for(const auto& item:j.at("granary")) w.granary.push_back({read_position(item.at("position")),read_enum<sim::Nutrient>(item.at("nutrient"),1,"nutrient"),item.at("amount").get<std::int64_t>()});
   for(const auto& item:j.at("actors")) w.actors.push_back(read_actor(item));
   w.spoil_mound=j.at("spoil_mound").get<std::uint64_t>(); w.starting_nest_air=j.at("starting_nest_air").get<int>(); w.connected_nest_air=j.at("connected_nest_air").get<int>(); w.nursery_capacity=j.at("nursery_capacity").get<int>();
   w.next_laying=j.at("next_laying").get<sim::Tick>(); w.queen_starvation=j.at("queen_starvation").get<sim::Tick>(); w.queen_alive=j.at("queen_alive").get<bool>(); w.decline=j.at("decline").get<bool>(); w.extinct=j.at("extinct").get<bool>(); w.focus=read_enum<sim::Focus>(j.at("focus"),3,"focus"); w.adaptation_levels=j.at("adaptation_levels").get<std::array<std::uint8_t,4>>();
@@ -204,6 +208,11 @@ void validate_world(const sim::WorldSnapshot& w) {
   for(const auto& b:w.brood){add(b.id);if(!passable(b.position)||b.target==0||b.progress>b.target) throw std::invalid_argument("invalid brood state");}
   for(const auto& c:w.corpses){add(c.id);if(!passable(c.position)) throw std::invalid_argument("invalid corpse position");}
   for(const auto& d:w.dropped_food){add(d.id);if(!passable(d.position)||d.amount<=0) throw std::invalid_argument("invalid dropped cargo");}
+  std::array<std::int64_t,2> stored{}; std::set<std::pair<int,int>> pile_cells;
+  for(const auto& g:w.granary){if(!passable(g.position)||g.amount<0||g.amount>sim::kGrainsPerStoreCell) throw std::invalid_argument("invalid food pile");
+    if(!pile_cells.insert({g.position.x,g.position.y}).second) throw std::invalid_argument("two food piles in one cell");
+    stored[static_cast<std::size_t>(g.nutrient)]+=g.amount;}
+  if(!w.granary.empty()&&(stored[0]!=w.stores.carbohydrate||stored[1]!=w.stores.protein)) throw std::invalid_argument("stored food does not match the heaps in the nest");
   if(w.traits.vigor_tier>4||w.traits.industry_tier>4) throw std::invalid_argument("trait tier above four");
   const int winged=static_cast<int>(std::count_if(w.actors.begin(),w.actors.end(),[](const sim::ActorState& a){return a.ant.kind==sim::AntKind::WingedQueen;}))+
                    static_cast<int>(std::count_if(w.brood.begin(),w.brood.end(),[](const sim::BroodSnapshot& b){return b.role==sim::BroodRole::Gyne;}));

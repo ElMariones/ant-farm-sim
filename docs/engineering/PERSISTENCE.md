@@ -78,3 +78,20 @@ On load failure try the backup only after verifying it; tell the user it is an e
 Implemented in T010 as `SaveService::replace_unreadable`, the one entry point that moves an unreadable `profile.json` to `profile.corrupt.N.json` before committing a replacement. It is never called automatically: both the backup restore and the start-over path run only from an explicit player choice in the paused recovery prompt, and no autosave is scheduled while that prompt is open.
 
 No offline progress in v0.1. Load paused at the exact saved tick, with a brief “Colony resumed” message. Test uninterrupted vs. save/load continuation with active cargo, pending paths, near-maturation brood, and a prestige-ready colony. Tests must inject failures at every save stage and verify no duplicate Legacy, lost accepted tier purchase, or overwritten corrupt original.
+
+## Additive world fields (T014e)
+
+Schema 2 gained three optional world fields rather than a new version, because every one of them is
+recoverable from a file that lacks it:
+
+- `granary` — the food piles. A profile written before food had a place in the nest restores as
+  totals with no heaps, and the world lays them out on load from the stored totals, so the colony
+  continues with the grain it had and nothing is created or duplicated. A profile that carries
+  heaps must have them add up to its stores, or it is rejected.
+- `brood[].carried_by` — the nurse holding a brood item, defaulting to none.
+- `actors[].forager.store_cell` — the heap a load is being carried to, defaulting to the origin,
+  which simply makes the forager pick a heap again on its next tick.
+
+`Material` gained `Stone` and `ForageState` gained `Storing`, both appended, so existing values keep
+their meaning. A file written by this version is not readable by an older binary; that direction was
+never promised.

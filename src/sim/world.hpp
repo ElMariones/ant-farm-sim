@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <entt/entity/registry.hpp>
+#include <optional>
 #include <vector>
 
 namespace ant::sim {
@@ -26,6 +27,19 @@ struct FoodSource {
   std::int64_t refill_amount{};
   Tick refill_interval{};
   Tick next_refill{};
+};
+
+// Grains a single store cell holds. Everything the colony owns sits in one of these, so a granary
+// is a place in the nest rather than a number on the interface.
+inline constexpr std::int64_t kGrainsPerStoreCell = 1'800;
+// Brood is kept within reach of the queen; food is stockpiled in the chambers beyond that.
+inline constexpr int kNurseryRadius = 12;
+
+struct FoodPile {
+  GridPos position{};
+  Nutrient nutrient{Nutrient::Carbohydrate};
+  // Zero means the cell is claimed for this nutrient but currently empty; it may be re-typed.
+  std::int64_t amount{};
 };
 
 struct FoodStore {
@@ -83,6 +97,8 @@ struct BroodSnapshot {
   Tick care_remaining{};
   Tick starvation{};
   BroodRole role{BroodRole::Worker};
+  // Nurse currently carrying this item, or zero when it is lying in the nest.
+  EntityId carried_by{};
 };
 
 // Permanent Legacy traits, fixed when the colony is founded. Effective parameters are computed
@@ -135,6 +151,7 @@ public:
   [[nodiscard]] std::vector<BroodSnapshot> brood() const;
   [[nodiscard]] const std::vector<CorpseSnapshot>& corpses() const { return corpses_; }
   [[nodiscard]] const std::vector<DroppedCargoSnapshot>& dropped_food() const { return dropped_food_; }
+  [[nodiscard]] const std::vector<FoodPile>& granary() const { return granary_; }
   [[nodiscard]] const TrailField& trails() const { return trails_; }
   [[nodiscard]] const TaskDiagnostics& task_diagnostics() const { return task_diagnostics_; }
   [[nodiscard]] int nursery_capacity() const { return nursery_capacity_; }
@@ -180,6 +197,22 @@ private:
   void spawn_workers();
   void refill_sources();
   void refresh_home_field();
+  // Splits the connected nest into the brood ring around the queen and the store chambers beyond
+  // it, and derives store capacity from the cells that actually exist. Purely a function of the
+  // grid, so a restored colony classifies exactly as the uninterrupted one does.
+  void refresh_zones();
+  [[nodiscard]] FoodPile* pile_at(GridPos cell);
+  [[nodiscard]] const FoodPile* pile_at(GridPos cell) const;
+  // Where one load of `nutrient` should go: the nearest heap with room, else the nearest free
+  // store cell. `bias` spreads simultaneous deliveries over neighbouring heaps.
+  [[nodiscard]] std::optional<GridPos> store_target(Nutrient nutrient, EntityId bias) const;
+  // Whether one more grain of `nutrient` could be set down in this cell.
+  [[nodiscard]] bool accepts_food(GridPos cell, Nutrient nutrient) const;
+  [[nodiscard]] std::optional<GridPos> nursery_target(EntityId ignore_brood) const;
+  [[nodiscard]] bool in_nursery(GridPos cell) const;
+  std::int64_t deposit_food(GridPos cell, Nutrient nutrient, std::int64_t amount);
+  void stock_granary(Nutrient nutrient, std::int64_t amount);
+  void store_cargo(entt::entity entity, int& path_budget);
   void process_forager(entt::entity entity, int& path_budget);
   void choose_source(entt::entity entity, int& path_budget);
   void refresh_path(entt::entity entity, int& path_budget);
@@ -239,6 +272,13 @@ private:
   std::vector<BroodSnapshot> brood_;
   std::vector<CorpseSnapshot> corpses_;
   std::vector<DroppedCargoSnapshot> dropped_food_;
+  // Append-only: a pile's slot is stable, so `pile_index_` can address it by cell.
+  std::vector<FoodPile> granary_;
+  std::vector<std::int32_t> pile_index_;
+  std::vector<GridPos> nursery_cells_;
+  std::vector<std::uint8_t> nursery_mask_;
+  std::vector<GridPos> store_cells_;
+  std::uint64_t zone_revision_{};
   int connected_nest_air_{};
   int starting_nest_air_{};
   int nursery_capacity_{12};

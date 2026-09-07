@@ -35,9 +35,13 @@ ctest --preset dev
 ./build/dev/ant_farm --seed 42
 ```
 
+The colony is drawn as a real cross-section. Roots run down from the turf and can be mined, slowly — four times the cost of soil — while scattered stone lenses through the deep ground can never be removed and passages have to bend around them. The founding nest is a royal chamber, two store chambers and the corridors between them, and every grain the colony owns is a visible heap on a real cell: foragers carry loads to a chamber and set them down, nurses carry eggs back to the nursery ring, and store capacity is exactly the room the colony has dug.
+
 The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/5×/20× speed. Its calm paper-and-diorama interface uses a high-resolution bundled Nunito atlas with DPI-aware rendering for crisp Retina text. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
 
-`F1`–`F4` buy the four run adaptations, `B`/`G`/`X`/`F` set colony focus once twelve workers are alive, and `S` saves immediately. `L` opens the flight and Legacy panel: it shows the readiness checklist and the exact payout while a colony is running, and between colonies it sells permanent traits (`V` Vigor, `Y` Industry) and founds the next colony (`C`). `Enter` sends the flight when every condition is met. Adaptations, focus, speed, pause and save have temporary pointer controls. Flight, permanent-trait purchase and founding currently require keyboard actions; T014 adds their pointer controls and confirmation flow. Selection and modal input have known defects documented in the audit.
+`F1`–`F4` buy the four run adaptations, `B`/`G`/`X`/`F` set colony focus once twelve workers are alive, and `S` saves immediately. `L` opens the flight and Legacy panel: it shows the readiness checklist and the exact payout while a colony is running, and between colonies it sells permanent traits (`V` Vigor, `Y` Industry) and founds the next colony (`C`). `Enter` sends the flight when every condition is met.
+
+Every action is also a button. Speed, pause, save, focus, adaptations, the flight, permanent traits, founding the next colony, restoring a damaged save and abandoning a run all have pointer controls with drawn vector icons, hover lift, press settle and a hover explanation — including on controls that are currently unavailable, which say why. Abandoning a colony asks for confirmation before it ends the run. While the game is paused the ants hold still: gait animation runs off a clock that only advances with the simulation.
 
 ### Saving
 

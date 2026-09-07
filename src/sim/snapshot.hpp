@@ -47,6 +47,7 @@ struct WorldSnapshot {
   std::vector<BroodSnapshot> brood;
   std::vector<CorpseSnapshot> corpses;
   std::vector<DroppedCargoSnapshot> dropped_food;
+  std::vector<FoodPile> granary;
   std::vector<ActorState> actors;
   std::uint64_t spoil_mound{};
   int starting_nest_air{};

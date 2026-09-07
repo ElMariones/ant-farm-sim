@@ -137,3 +137,31 @@ a revision/content hash before tuning; T013a in NEXT_STEPS requires first-afford
 - Larval starvation is reported at some point in nearly every run. Colonies recover, but the
   larva ration may be tighter than intended.
 - These runs stop at first flight, so nothing is measured about a colony left running much longer.
+
+## T014e re-check — physical food and a living nest
+
+Measured 2026-09-07 after roots became mineable, stone became permanent, the founding nest became
+three chambers, and stored food moved from a counter into heaps on real cells. Release build,
+Apple Silicon macOS, three seeds against both policies:
+
+| Seed | Policy | Flight (s) | Maturity (s) | First buy (s) | Peak | Deaths |
+|---|---|---|---|---|---|---|
+| 1 | buy | 1982 | 1662 | 182 | 172 | 18 |
+| 1 | none | 2391 | 1942 | — | 148 | 42 |
+| 42 | buy | 1958 | 1639 | 183 | 179 | 11 |
+| 42 | none | 2392 | 1941 | — | 151 | 39 |
+| 101 | buy | 1951 | 1635 | 187 | 174 | 15 |
+| 101 | none | 2412 | 1966 | — | 146 | 44 |
+
+Pacing is unchanged: every run lands inside ECONOMY's 30–45 minute first-prestige target and inside
+the 2–4 minute first-investment target, peak population and deaths match the rows above, and no run
+declines or goes extinct. The dominant bottleneck is still "Brood needs nursing".
+
+Sixty simulated minutes on seed 42 gives the same 143 workers, 278 births and 141 deaths as before
+the change, and 1,808 Work against 1,692, while cells excavated rose from 664 to 905 because a full
+larder is now a reason to dig a chamber.
+
+One balance change was needed and is recorded here rather than tuned away. Taking a dig face now
+commits a worker for `5 + distance/6` seconds instead of a flat five. A store chamber can be a ten
+second walk from the queen; with the old flat commitment a worker reconsidered and turned back
+before it ever arrived, and excavation over twenty thousand ticks fell from 117 cells to 17.

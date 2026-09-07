@@ -12,7 +12,8 @@ Use procedural primitives and a tiny original sprite atlas first. No external im
 |---|---|---|
 | Deep soil | `#302923` | Low-contrast granular pattern |
 | Sandy layer | `#8D6946` | Sparse 2x2 flecks, darker at depth |
-| Tunnel interior | `#171B19` | Consistent silhouette, subtle edge highlight |
+| Tunnel interior | `#1C1E1B` | Warmed a little beside walls; a trodden `#4A3A2C` floor where ground carries it |
+| Stone lens | `#606368` | Cool grey flecks against warm soil; never removable |
 | Foliage | `#708457` | Irregular tufts at surface |
 | Sky | `#C9D5C3` | Narrow calm band |
 | UI paper | `#EEE4CC` | Flat panels and thin borders |
@@ -58,6 +59,10 @@ The right inspector uses about 280 logical pixels on a wide display. At 1024x640
 The numeric HUD is a final-state mock, not starting values. “Growing steadily” must derive from measured births/deaths and bottleneck state, not static copy. Hide winged-queen counts until relevant.
 
 ## Panels
+
+**Implemented — food you can see.** The two forage sites are a fallen berry ringed with seed husks and a dead beetle, both shrinking as the colony carries them away. Stored food is drawn where it actually is: every heap in a store chamber grows up from the chamber floor as the pile fills, in the nutrient's own colour, and collapses to a tinted cell below zoom 2.2. Brood held by a nurse rides on her interpolated pose rather than hopping cell to cell.
+
+**Implemented — every action is a control.** Speed, pause, save, focus, adaptations, the flight, permanent traits, founding the next colony, restoring a damaged save and abandoning a run are all buttons. Icons are drawn as vector glyphs from a unit box scaled into the control, so one definition stays sharp at any size and display scale. Hover lifts and warms a control, press settles it, and hover always names what a control does — including a control that is currently unavailable, which says why instead of staying silent. Abandoning a colony arms a confirmation before it commits. Gait and other world motion run off a clock that only advances with the simulation, so a paused ant holds still instead of treading air.
 
 **Colony:** queen condition, workers/brood, food trend, nursery occupancy, one primary limiting condition. For example, “Larvae need protein — Foraging focus can help.” Use a rolling 30 sim-second rate after enough observations; show “Measuring…” before then.
 

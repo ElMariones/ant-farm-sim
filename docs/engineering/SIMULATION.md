@@ -33,9 +33,11 @@ Guarantee first: same build + content snapshot + seed + ordered commands produce
 
 ## World and topology
 
-Initial world: 384x216 cells, 32x32 chunks, top 32 rows surface/sky. Four-neighbor movement; roots/bedrock impassable, soil and clay diggable. No diagonal corner cutting. Seeded layer variations must preserve a starter entrance, chamber, surface route, and two reachable sources.
+Initial world: 384x216 cells, 32x32 chunks, top 32 rows surface/sky. Four-neighbor movement; bedrock and stone are impassable and never removable, and soil, clay and root are diggable at rising cost. No diagonal corner cutting. Seeded layer variations must preserve a starter entrance, chambers, surface route, and two reachable sources.
 
-Air cells have semantic regions (surface/nest); reachable nest air determines nursery capacity. All ants share navigable cells without collision solving. Avoid overlap visually with deterministic small offsets; these never change physical passability.
+The founding nest is a royal chamber around the queen, two store chambers twenty cells to either side, the corridors joining them and an entrance shaft. Roots run down from the turf and scattered stone lenses sit through the deep ground, both generated before the nest is carved so neither can block it.
+
+Air cells have semantic regions derived from the connected nest each time topology changes: cells within Manhattan distance `kNurseryRadius` of home are **nursery**, and cells beyond it with at least sixteen open cells in their five-by-five neighbourhood are **store cells**. A three-wide corridor can never reach sixteen, so passages stay clear and only real chambers hold food. Reachable nest air and the nursery cell count together determine nursery capacity. All ants share navigable cells without collision solving. Avoid overlap visually with deterministic small offsets; these never change physical passability.
 
 Movement is integer subcell distance per tick with residual carry so fractions are not lost. Worker speed starts at 6 cells/sec. An arrival cannot overshoot a solid tile. Paths comprise cell centers; sim position is authoritative and render interpolation is cosmetic.
 
@@ -87,9 +89,9 @@ A face advances only once its centreline cell is genuinely open, then keeps its 
 
 The excavation envelope is `y > 34` and Manhattan distance from home under 96, which reaches the clay layer; the previous radius of 64 did not. Seeded tie-breaking prevents perfect symmetry. Faces steer future digging, so they are serialized with the run rather than rederived, and they contribute to the canonical hash.
 
-Each cell has remaining dig work (soil 10, clay 25 units). Base worker delivers 2 work units/sec. On final hit, clear cell, bump topology/chunk revisions, and put one spoil unit in the final digger's cargo. It must deliver to surface before digging again. Other diggers release that cell and retarget. Spoil is tipped onto a bounded surface apron; once that apron is full the grain is recorded as **overflow** tipped out of view, so `spoil_delivered == mound + overflow` always holds and a full apron never traps the excavator carrying the grain.
+Each cell has remaining dig work (soil 10, clay 25, root 40 units); stone and bedrock have none and are never planned. Base worker delivers 2 work units/sec. On final hit, clear cell, bump topology/chunk revisions, and put one spoil unit in the final digger's cargo. It must deliver to surface before digging again. Other diggers release that cell and retarget. Spoil is tipped onto a bounded surface apron; once that apron is full the grain is recorded as **overflow** tipped out of view, so `spoil_delivered == mound + overflow` always holds and a full apron never traps the excavator carrying the grain.
 
-Each newly connected excavated cell contributes to nursery capacity: `max(12, floor(reachable_nest_air / 4))`. Initial connected nest area is at least 64 cells (capacity >=16). Capacity limits all live brood together, not adult workers. If capacity drops in a debug edit, existing brood survive but laying pauses.
+Nursery capacity is `max(12, min(floor(reachable_nest_air / 4), nursery cells))`, so brood can never outnumber the cradles that exist. Initial connected nest area is at least 64 cells (capacity >=16). Capacity limits all live brood together, not adult workers. If capacity drops in a debug edit, existing brood survive but laying pauses.
 
 Full structural stability/collapse is out of scope. Do not implement the archive's anchored-solid flood fill as a physical support solver: connected soil can still be mechanically unsupported, and chunk-only analysis can miss remote supports.
 
@@ -174,3 +176,29 @@ stuck this way, and because they moved every tick they counted as productive whi
 ## Accepted colony behavior revision (2026-09-07; not yet implemented)
 
 See [NEXT_STEPS](../planning/NEXT_STEPS.md) for T006b and T003b: collision-safe diagonal fixed-point travel and separate useful-space accounting. T006a and T003a are delivered — excavation plans persistent dig faces, and equally short routes vary per ant — but routing is still four-neighbor and travel is still X-first, and every connected air cell still counts toward capacity. Implement snapshot/migration and balance checks together with those changes; the guide does not silently change existing saves.
+
+## Food has a place in the nest (T014e)
+
+Stored food is not a counter. Every grain the colony owns sits in a **food pile** on one store
+cell, holding at most `kGrainsPerStoreCell`, and `sum(piles) == stores` is a world invariant
+checked on every load. Store capacity is therefore the room the colony has dug: two thirds of the
+store cells are allotted to carbohydrate and the rest to protein, so a fuller larder is a reason to
+excavate a new chamber rather than a number that grew on its own. Capacity never falls below what
+is already stored, so a survey can never invalidate grain that exists.
+
+A returning forager walks home on the home field as before, then carries its load on to the heap it
+was assigned and sets it down there. That assignment is held for the whole delivery: re-picking the
+nearest heap every tick made a crowd of foragers chase each other's targets and never arrive.
+Candidates are spread over the four nearest acceptable cells by the ant's own id. When no cell can
+take the load the ant keeps holding it in `WaitingForStorage`, exactly as before.
+
+Consumption draws from the heaps nearest the queen first, so the chambers by the nursery empty
+before the far ones.
+
+Eggs are laid into a free nursery cell rather than a fixed block, one brood item per cell, and a
+nurse who finds brood outside the nursery ring carries it back in her mandibles; a carried item
+rides at its carrier's cell and is released as soon as a cradle is free. A carrier's death releases
+what she was holding.
+
+Taking a dig face commits the worker for twelve seconds of task choice. A chamber can be a long walk
+from the queen, and a worker that reconsidered every five seconds turned back before it ever arrived.

@@ -82,7 +82,16 @@ bool is_passable(const Material material) {
 }
 
 bool is_diggable(const Material material) {
-  return material == Material::Soil || material == Material::Clay;
+  return material == Material::Soil || material == Material::Clay || material == Material::Root;
+}
+
+std::uint16_t dig_effort(const Material material) {
+  switch (material) {
+  case Material::Soil: return 1'000;
+  case Material::Clay: return 2'500;
+  case Material::Root: return 4'000;
+  default: return 0;
+  }
 }
 
 } // namespace ant::sim

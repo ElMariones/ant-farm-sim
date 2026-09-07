@@ -6,6 +6,7 @@
 #include "presentation/ui_state.hpp"
 #include "presentation/interaction.hpp"
 #include "presentation/desktop_input.hpp"
+#include "presentation/icons.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -37,6 +38,8 @@ public:
   [[nodiscard]] std::optional<game::TraitBranch> trait_requested() const { return trait_requested_; }
   [[nodiscard]] bool legacy_panel_open() const { return scenes_.scene() == Scene::Legacy; }
   [[nodiscard]] bool new_colony_requested() const { return new_colony_requested_; }
+  // Ends the current colony with no payout. Only set after the player confirms it twice.
+  [[nodiscard]] bool abandon_requested() const { return abandon_requested_; }
   void clear_requests();
   // Short save/recovery line shown in the footer, owned by the app coordinator.
   void set_status_line(std::string status) { status_line_ = std::move(status); }
@@ -62,15 +65,24 @@ private:
                 bool selected);
   void draw_interface(const game::GameView& view, bool paused, int speed, bool simulation_limited);
   void draw_pause_menu();
-  void draw_recovery_prompt() const;
-  void draw_legacy_panel(const game::GameView& view) const;
+  void draw_recovery_prompt();
+  void draw_legacy_panel(const game::GameView& view);
+  void draw_food_source(const sim::FoodSource& source) const;
+  void draw_granary(const game::GameView& view) const;
+  // A modal card with a title, a rule under it and a shadow, shared by every overlay.
+  [[nodiscard]] Rectangle draw_modal_card(float width, float height, const char* title) const;
   [[nodiscard]] std::string truncate_to_width(const std::string& text, float max_width,
                                               float size) const;
   void update_selection(const game::GameView& view, double interpolation_alpha);
   void draw_text(const char* text, int x, int y, int size = 20,
                  Color color = Color{37, 45, 40, 255}) const;
   void draw_button(Rectangle bounds, const char* label, bool active, const WidgetVisual& visual,
-                   bool enabled = true) const;
+                   bool enabled = true, std::optional<Icon> icon = {}) const;
+  // Tracks, draws and reports one button in a single call, so every clickable control in the
+  // interface is declared the same way.
+  [[nodiscard]] bool button(std::uint32_t id, Rectangle bounds, const char* label, bool active,
+                            bool enabled = true, std::optional<Icon> icon = {},
+                            const char* tooltip = nullptr, const char* tooltip_title = nullptr);
   void draw_tooltip(const char* title, const char* body, float anchor_x, float anchor_y) const;
 
   DesktopInput desktop_input_;
@@ -109,6 +121,11 @@ private:
   bool save_requested_{};
   bool recover_requested_{};
   bool new_colony_requested_{};
+  bool abandon_requested_{};
+  // Abandoning a colony is destructive, so the button arms a confirmation first.
+  bool abandon_armed_{};
+  // Advances only while the colony is running, so a paused ant holds still instead of treading air.
+  float animation_clock_{};
 
   bool flight_requested_{};
   bool new_run_requested_{};

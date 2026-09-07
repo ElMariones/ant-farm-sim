@@ -66,6 +66,7 @@ WidgetVisual UiState::track(const std::uint32_t id, const UiRect bounds, const b
 
   WidgetVisual visual;
   visual.enabled = enabled;
+  visual.over = over;
   visual.hovered = over && enabled;
   if (visual.hovered) hovered_id_ = id;
 

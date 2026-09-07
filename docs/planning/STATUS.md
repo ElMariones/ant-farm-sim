@@ -8,6 +8,35 @@ Updated: 2026-09-07.
 
 M4 completes the generation loop. A colony latches **maturity** at 100 living workers, 150 worker births and 12 simulated minutes; after that one egg in five becomes a **winged queen**, capped at ten live and developing combined. With three winged queens, a living founding queen and an unassisted run, the player can send a **nuptial flight**, which pays Genetic Legacy through a single committed profile revision carrying an immutable receipt. Between colonies, Legacy buys eight permanent trait tiers across Vigor and Industry, and founding the next colony applies the owned traits exactly once.
 
+## Latest session — T014e and T006b
+
+**The nest is a place, not a set of counters.** Roots are mineable at four times the cost of soil,
+scattered stone lenses through the deep ground can never be removed, the founding nest is a royal
+chamber with two store chambers and the corridors between them, and every grain the colony owns is
+a visible heap on a real cell. Store capacity is exactly the room the colony has dug, so a full
+larder is now a reason to excavate a chamber. Eggs are laid into free nursery cells and nurses carry
+strays back in their mandibles. Every action in the interface is a button with a drawn vector icon,
+hover lift and a hover explanation, including on unavailable controls; abandoning a colony is a
+confirmed two-step button. Paused ants hold still.
+
+Verified on this machine (Apple Silicon macOS, Apple Clang 21, Debug `dev` preset):
+
+- `./build/dev/ant_tests`: **pass, 40,859 assertions in 139 test cases**, including the sixty-minute
+  soak. Three new world cases cover the granary sum invariant, brood staying in the nursery ring,
+  and stone surviving twenty thousand ticks while roots cost four times soil.
+- `cmake --build --preset release`: pass. The release binary opens the colony and writes a save.
+- `ant_headless --verify-round-trip` at 20,000 ticks passes on seeds 42, 7, 101 and 2026. Store
+  capacity is derived from the grid alone, so a restored colony computes the same number as an
+  uninterrupted one.
+- Sixty simulated minutes on seed 42: 143 workers, 278 births, 141 deaths, 1,808 Work — the same
+  population and economy as before this session — with 905 cells excavated against 664, because
+  chambers are now dug in response to a full larder.
+- Native captures at three zoom levels: the cross-section, the founding nest and a mature colony
+  with filled granaries, plus the flight panel with its readiness checklist and buttons.
+
+Known gaps: the pause menu's abandon confirmation and the recovery prompt's buttons were not driven
+in a native session, so T014c stays partial.
+
 ## Active scope
 
 **Next: T003b — weighted diagonal navigation and fixed-point travel.** T003a is complete: ants that share endpoints no longer share a route, while every route stays shortest. T006a is complete: excavation plans persistent dig faces that drive three-wide corridors, branch, stair-step around obstacles and widen into chambers on demand, and spoil overflow is accounted for explicitly. T014a is complete: shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector, with the native interaction confirmed by the project owner. Simulation and save formats were unchanged by it. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.

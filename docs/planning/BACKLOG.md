@@ -26,14 +26,15 @@ The [audit and design guide](NEXT_STEPS.md) defines source findings, implementat
 | T003a — complete | Deterministic per-ant route tie variation | T006a | Multiple legal routes in wide fixture, narrow-route success and continuation equality |
 | **T003b — next ready** | Weighted diagonal navigation, fixed-point 2D travel and safe lane offsets | T003a | All octants, speed, no corner cuts, topology invalidation and mid-route saves |
 | T014b | Subtle stable size/color/gait variation using shared render/pick poses | T003b | Zoom-tier native captures, stable reload appearance, unchanged sim state |
-| T006b | Separate useful chamber capacity from transit air, compatibility accounting | T006a, T003b | No double-granted capacity on migration/reload; reachable-space invariants |
+| T006b — complete | Separate useful chamber capacity from transit air, compatibility accounting | T006a | No double-granted capacity on migration/reload; reachable-space invariants |
+| T014e — complete | Mineable roots, permanent stone, physical food and brood placement, reworked forage sites, pointer controls and icons on every action | T006b | Granary sum invariant, root/stone digging tests, brood-in-nursery test, round-trip equality, native captures |
 | T013a | Re-baseline geometry/motion, affordable first trait, delayed flight and long-lived colony policies | T006b, T003b | Five seeds × both policies, tier-I local benefit measurement, larger-payout and no-flight evidence |
-| T014c | Pointer/keyboard flight confirmation, shop resume, save failure and normal defeat restart | T014a, T013a | Actual cancel/commit/shop/reload/new-colony flow with both input methods |
+| T014c — partial | Pointer/keyboard flight confirmation, shop resume, save failure and normal defeat restart | T014a, T013a | Actual cancel/commit/shop/reload/new-colony flow with both input methods |
 | T014d | Onboarding, trends, four clear cards, scaling and reduced motion | T014b, T014c | Required scenes, minimum-size/scaling/focus review; limitations recorded |
 | T015 remaining | Population/renderer/save benchmarks, sanitizers, two-hour soak | T013a, T014d | Full VALIDATION report or explicit release scope reduction |
 | T016 remaining | `.app`, archive/version/attribution and external launch/restart | T015 | Local package works independently of cwd; publication only if requested |
 
-T015's once-per-tick claim optimization is delivered; its full gate is not. Do not repeat that optimization or mark the full task complete from the sixty-minute test. T006/T003 children reopen experience quality rather than erasing historical M1/M2 delivery.
+T014c's pointer controls are delivered by T014e — flight, permanent traits, founding, recovery and a confirmed abandon are all buttons — but the end-to-end cancel/commit/shop/reload flow has not been driven natively, so the task stays partial. T015's once-per-tick claim optimization is delivered; its full gate is not. Do not repeat that optimization or mark the full task complete from the sixty-minute test. T006/T003 children reopen experience quality rather than erasing historical M1/M2 delivery.
 
 ## T001 — Bootstrap build, libraries, and tests
 

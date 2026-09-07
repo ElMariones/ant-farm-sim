@@ -14,7 +14,8 @@ GameView make_view(const Session& session) {
           sim::Grid::kHeight,    world.grid().cells(),  world.home(),
           world.sources(),       world.stores(),        world.stats(),
           world.actors(),        world.brood(),         world.corpses(),
-          world.dropped_food(),  world.trails().cells(), world.task_diagnostics(), world.nursery_capacity(),
+          world.dropped_food(),  world.granary(),       world.trails().cells(),
+          world.task_diagnostics(), world.nursery_capacity(),
           world.connected_nest_air(), world.spoil_mound(), world.queen_alive(),
           world.decline(),       world.extinct(), world.focus(), session.focus_available()};
   view.focus_cooldown_remaining = session.focus_cooldown_remaining();
