@@ -6,7 +6,10 @@
 #include <array>
 #include <iomanip>
 #include <limits>
+#include "sim/rng.hpp"
+
 #include <nlohmann/json.hpp>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -102,13 +105,12 @@ sim::WorldStats read_stats(const json& j) {
 
 json source_json(const sim::FoodSource& s) {
   return {{"id",s.id},{"position",position_json(s.position)},{"nutrient",enum_value(s.nutrient)},
-          {"amount",s.amount},{"capacity",s.capacity},{"reserved",s.reserved},{"refill_amount",s.refill_amount},
-          {"refill_interval",s.refill_interval},{"next_refill",s.next_refill}};
+          {"amount",s.amount},{"capacity",s.capacity},{"reserved",s.reserved},{"known",s.known},{"appeared",s.appeared}};
 }
 sim::FoodSource read_source(const json& j) {
   return {j.at("id").get<sim::EntityId>(),read_position(j.at("position")),read_enum<sim::Nutrient>(j.at("nutrient"),1,"nutrient"),
           j.at("amount").get<std::int64_t>(),j.at("capacity").get<std::int64_t>(),j.at("reserved").get<std::int64_t>(),
-          j.at("refill_amount").get<std::int64_t>(),j.at("refill_interval").get<sim::Tick>(),j.at("next_refill").get<sim::Tick>()};
+          j.at("known").get<bool>(),j.at("appeared").get<sim::Tick>()};
 }
 
 json actor_json(const sim::ActorState& a) {
@@ -118,7 +120,7 @@ json actor_json(const sim::ActorState& a) {
   if (a.worker) {
     json path=json::array(); for (const auto p:a.movement.path) path.push_back(position_json(p));
     result["movement"]={{"path",std::move(path)},{"next_cell",a.movement.next_cell},{"path_revision",a.movement.path_revision},{"speed_residual",a.movement.speed_residual},{"path_valid",a.path_valid}};
-    result["forager"]={{"state",enum_value(a.forager.state)},{"source_index",a.forager.source_index},{"reserved_amount",a.forager.reserved_amount},{"reservation_expiry",a.forager.reservation_expiry},{"retry_after",a.forager.retry_after},{"store_cell",position_json(a.forager.store_cell)}};
+    result["forager"]={{"state",enum_value(a.forager.state)},{"source_id",a.forager.source_id},{"reserved_amount",a.forager.reserved_amount},{"reservation_expiry",a.forager.reservation_expiry},{"retry_after",a.forager.retry_after},{"store_cell",position_json(a.forager.store_cell)},{"scout_target",position_json(a.forager.scout_target)}};
     result["mind"]={{"task",enum_value(a.mind.task)},{"committed_until",a.mind.committed_until},{"thresholds",a.mind.thresholds},{"target",position_json(a.mind.target)},{"has_target",a.mind.has_target},{"action_ticks",a.mind.action_ticks}};
     result["life"]={{"age",a.life.age},{"lifespan",a.life.lifespan},{"starvation",a.life.starvation}};
   } else if (a.ant.kind == sim::AntKind::WingedQueen) {
@@ -134,7 +136,7 @@ sim::ActorState read_actor(const json& j) {
   const auto& c=j.at("cargo"); a.cargo={read_enum<sim::CargoKind>(c.at("kind"),3,"cargo kind"),read_enum<sim::Nutrient>(c.at("nutrient"),1,"cargo nutrient"),c.at("amount").get<std::int64_t>(),c.at("entity_id").get<sim::EntityId>()};
   if (a.worker) {
     const auto& m=j.at("movement"); for(const auto& item:m.at("path")) a.movement.path.push_back(read_position(item)); a.movement.next_cell=m.at("next_cell").get<std::size_t>(); a.movement.path_revision=m.at("path_revision").get<std::uint64_t>(); a.path_valid=m.value("path_valid",true); a.movement.speed_residual=m.at("speed_residual").get<int>();
-    const auto& f=j.at("forager"); a.forager={read_enum<sim::ForageState>(f.at("state"),4,"forage state"),f.at("source_index").get<int>(),f.at("reserved_amount").get<std::int64_t>(),f.at("reservation_expiry").get<sim::Tick>(),f.at("retry_after").get<sim::Tick>(),f.contains("store_cell")?read_position(f.at("store_cell")):sim::GridPos{}};
+    const auto& f=j.at("forager"); a.forager={read_enum<sim::ForageState>(f.at("state"),5,"forage state"),f.at("source_id").get<sim::EntityId>(),f.at("reserved_amount").get<std::int64_t>(),f.at("reservation_expiry").get<sim::Tick>(),f.at("retry_after").get<sim::Tick>(),read_position(f.at("store_cell")),read_position(f.at("scout_target"))};
     const auto& mind=j.at("mind"); a.mind.task=read_enum<sim::Task>(mind.at("task"),4,"task"); a.mind.committed_until=mind.at("committed_until").get<sim::Tick>(); a.mind.thresholds=mind.at("thresholds").get<std::array<std::uint16_t,4>>(); a.mind.target=read_position(mind.at("target")); a.mind.has_target=mind.at("has_target").get<bool>(); a.mind.action_ticks=mind.at("action_ticks").get<int>();
     const auto& life=j.at("life"); a.life={life.at("age").get<sim::Tick>(),life.at("lifespan").get<sim::Tick>(),life.at("starvation").get<sim::Tick>()};
   } else if (a.ant.kind == sim::AntKind::WingedQueen) {
@@ -151,33 +153,32 @@ json world_json(const sim::WorldSnapshot& w) {
   json dropped=json::array(); for(const auto& d:w.dropped_food) dropped.push_back({{"id",d.id},{"position",position_json(d.position)},{"nutrient",enum_value(d.nutrient)},{"amount",d.amount},{"age",d.age}});
   json actors=json::array(); for(const auto& a:w.actors) actors.push_back(actor_json(a));
   json granary=json::array(); for(const auto& g:w.granary) granary.push_back({{"position",position_json(g.position)},{"nutrient",enum_value(g.nutrient)},{"amount",g.amount}});
-  json dig_faces=json::array(); for(const auto& f:w.dig_faces) dig_faces.push_back({{"anchor",position_json(f.anchor)},{"heading",position_json(f.heading)},{"length",f.length},{"blocked",f.blocked},{"chamber",f.chamber}});
+  json rooms=json::array(); for(const auto& r:w.rooms) rooms.push_back({{"centre",position_json(r.centre)},{"radius",r.radius},{"kind",enum_value(r.kind)},{"complete",r.complete}});
   return {{"seed",w.seed},{"tick",w.tick},{"next_id",w.next_id},{"home",position_json(w.home)},
     {"terrain",std::move(terrain)},{"sources",std::move(sources)},
     {"stores",{{"carbohydrate",w.stores.carbohydrate},{"protein",w.stores.protein},{"carbohydrate_capacity",w.stores.carbohydrate_capacity},{"protein_capacity",w.stores.protein_capacity}}},
     {"stats",stats_json(w.stats)},
-    {"rng",{{"behavior_state",w.behavior_rng_state},{"behavior_increment",w.behavior_rng_increment},{"lifecycle_state",w.lifecycle_rng_state},{"lifecycle_increment",w.lifecycle_rng_increment}}},
+    {"rng",{{"behavior_state",w.behavior_rng_state},{"behavior_increment",w.behavior_rng_increment},{"lifecycle_state",w.lifecycle_rng_state},{"lifecycle_increment",w.lifecycle_rng_increment},{"world_state",w.world_rng_state},{"world_increment",w.world_rng_increment}}},
     {"trails",w.trails},{"dig_work",w.dig_work},
     {"task_diagnostics",{{"stimuli",w.task_diagnostics.stimuli},{"workers_by_task",w.task_diagnostics.workers_by_task}}},
-    {"dig_faces",std::move(dig_faces)},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"granary",std::move(granary)},{"actors",std::move(actors)},
+    {"rooms",std::move(rooms)},{"next_source_spawn",w.next_source_spawn},{"recruiting_source",w.recruiting_source},{"recruit_until",w.recruit_until},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"granary",std::move(granary)},{"actors",std::move(actors)},
     {"spoil_mound",w.spoil_mound},{"starting_nest_air",w.starting_nest_air},{"connected_nest_air",w.connected_nest_air},{"nursery_capacity",w.nursery_capacity},
     {"next_laying",w.next_laying},{"queen_starvation",w.queen_starvation},{"queen_alive",w.queen_alive},{"decline",w.decline},{"extinct",w.extinct},
     {"focus",enum_value(w.focus)},{"adaptation_levels",w.adaptation_levels},
     {"traits",{{"vigor_tier",w.traits.vigor_tier},{"industry_tier",w.traits.industry_tier}}},
-    {"mature",w.mature},{"egg_assignment_counter",w.egg_assignment_counter},{"frontiers_valid",w.frontiers_valid}};
+    {"mature",w.mature},{"egg_assignment_counter",w.egg_assignment_counter}};
 }
 
 sim::WorldSnapshot read_world(const json& j) {
   sim::WorldSnapshot w; w.seed=j.at("seed").get<std::uint64_t>(); w.tick=j.at("tick").get<sim::Tick>(); w.next_id=j.at("next_id").get<sim::EntityId>(); w.home=read_position(j.at("home"));
   const auto& terrain=j.at("terrain"); if(!terrain.is_array()||terrain.size()!=static_cast<std::size_t>(sim::Grid::kWidth*sim::Grid::kHeight)) throw std::invalid_argument("terrain array has wrong size"); w.terrain.reserve(terrain.size()); for(const auto& item:terrain) w.terrain.push_back(read_enum<sim::Material>(item,6,"material"));
-  const auto& sources=j.at("sources"); if(!sources.is_array()||sources.size()!=2) throw std::invalid_argument("two food sources required"); for(std::size_t i=0;i<2;++i) w.sources[i]=read_source(sources[i]);
+  const auto& sources=j.at("sources"); if(!sources.is_array()||sources.size()>sim::kMaxFoodSources) throw std::invalid_argument("too many food sources"); for(const auto& item:sources) w.sources.push_back(read_source(item));
   const auto& stores=j.at("stores"); w.stores={stores.at("carbohydrate").get<std::int64_t>(),stores.at("protein").get<std::int64_t>(),stores.at("carbohydrate_capacity").get<std::int64_t>(),stores.at("protein_capacity").get<std::int64_t>()};
-  w.stats=read_stats(j.at("stats")); const auto& rng=j.at("rng"); w.behavior_rng_state=rng.at("behavior_state").get<std::uint64_t>(); w.behavior_rng_increment=rng.at("behavior_increment").get<std::uint64_t>(); w.lifecycle_rng_state=rng.at("lifecycle_state").get<std::uint64_t>(); w.lifecycle_rng_increment=rng.at("lifecycle_increment").get<std::uint64_t>();
+  w.stats=read_stats(j.at("stats")); const auto& rng=j.at("rng"); w.behavior_rng_state=rng.at("behavior_state").get<std::uint64_t>(); w.behavior_rng_increment=rng.at("behavior_increment").get<std::uint64_t>(); w.lifecycle_rng_state=rng.at("lifecycle_state").get<std::uint64_t>(); w.lifecycle_rng_increment=rng.at("lifecycle_increment").get<std::uint64_t>(); w.world_rng_state=rng.at("world_state").get<std::uint64_t>(); w.world_rng_increment=rng.at("world_increment").get<std::uint64_t>();
   w.trails=j.at("trails").get<std::vector<std::uint16_t>>(); w.dig_work=j.at("dig_work").get<std::vector<std::uint16_t>>();
   const auto& td=j.at("task_diagnostics"); w.task_diagnostics.stimuli=td.at("stimuli").get<std::array<std::uint16_t,4>>(); w.task_diagnostics.workers_by_task=td.at("workers_by_task").get<std::array<std::uint32_t,5>>();
-  // Saves written before excavation had persistent faces simply carry none; the plan reseeds them
-  // from the grid on the next survey, which loses no history a face was holding.
-  if(j.contains("dig_faces")) for(const auto& item:j.at("dig_faces")) { sim::DigFace face; face.anchor=read_position(item.at("anchor")); face.heading=read_position(item.at("heading")); face.length=item.at("length").get<std::uint16_t>(); face.blocked=item.at("blocked").get<std::uint16_t>(); face.chamber=item.at("chamber").get<bool>(); face.active=true; if(w.dig_faces.size()<sim::kMaxDigFaces && std::abs(face.heading.x)+std::abs(face.heading.y)==1) w.dig_faces.push_back(face); }
+  for(const auto& item:j.at("rooms")) { if(w.rooms.size()>=sim::kMaxRooms) break; const int radius=item.at("radius").get<int>(); if(radius<1||radius>sim::kRoomMaxRadius) throw std::invalid_argument("room radius outside its range"); w.rooms.push_back({read_position(item.at("centre")),static_cast<std::uint8_t>(radius),read_enum<sim::RoomKind>(item.at("kind"),1,"room kind"),item.at("complete").get<bool>()}); }
+  w.next_source_spawn=j.at("next_source_spawn").get<sim::Tick>(); w.recruiting_source=j.at("recruiting_source").get<sim::EntityId>(); w.recruit_until=j.at("recruit_until").get<sim::Tick>();
   for(const auto& item:j.at("brood")) w.brood.push_back({item.at("id").get<sim::EntityId>(),read_enum<sim::BroodStage>(item.at("stage"),2,"brood stage"),read_position(item.at("position")),item.at("progress").get<sim::Tick>(),item.at("target").get<sim::Tick>(),item.at("care_remaining").get<sim::Tick>(),item.at("starvation").get<sim::Tick>(),read_enum<sim::BroodRole>(item.at("role"),1,"brood role"),item.value("carried_by",sim::EntityId{0})});
   for(const auto& item:j.at("corpses")) w.corpses.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),item.at("age").get<sim::Tick>(),item.at("cleanable").get<bool>()});
   for(const auto& item:j.at("dropped_food")) w.dropped_food.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),read_enum<sim::Nutrient>(item.at("nutrient"),1,"nutrient"),item.at("amount").get<std::int64_t>(),item.at("age").get<sim::Tick>()});
@@ -188,7 +189,7 @@ sim::WorldSnapshot read_world(const json& j) {
   w.spoil_mound=j.at("spoil_mound").get<std::uint64_t>(); w.starting_nest_air=j.at("starting_nest_air").get<int>(); w.connected_nest_air=j.at("connected_nest_air").get<int>(); w.nursery_capacity=j.at("nursery_capacity").get<int>();
   w.next_laying=j.at("next_laying").get<sim::Tick>(); w.queen_starvation=j.at("queen_starvation").get<sim::Tick>(); w.queen_alive=j.at("queen_alive").get<bool>(); w.decline=j.at("decline").get<bool>(); w.extinct=j.at("extinct").get<bool>(); w.focus=read_enum<sim::Focus>(j.at("focus"),3,"focus"); w.adaptation_levels=j.at("adaptation_levels").get<std::array<std::uint8_t,4>>();
   const auto& t=j.at("traits"); w.traits={t.at("vigor_tier").get<std::uint8_t>(),t.at("industry_tier").get<std::uint8_t>()};
-  w.mature=j.at("mature").get<bool>(); w.frontiers_valid=j.value("frontiers_valid",true); w.egg_assignment_counter=j.at("egg_assignment_counter").get<std::uint64_t>();
+  w.mature=j.at("mature").get<bool>(); w.egg_assignment_counter=j.at("egg_assignment_counter").get<std::uint64_t>();
   return w;
 }
 
@@ -198,13 +199,14 @@ void validate_world(const sim::WorldSnapshot& w) {
   if(w.actors.size()+w.brood.size()+w.corpses.size()+w.dropped_food.size()>20'000||w.brood.size()>5'000) throw std::invalid_argument("entity limit exceeded");
   if(!sim::Grid().in_bounds(w.home)||w.starting_nest_air<=0||w.connected_nest_air<w.starting_nest_air||w.nursery_capacity<12) throw std::invalid_argument("invalid nest dimensions");
   std::set<sim::EntityId> ids; sim::EntityId maximum=0; auto add=[&](sim::EntityId id){if(id==0||!ids.insert(id).second) throw std::invalid_argument("duplicate or zero entity id"); maximum=std::max(maximum,id);};
-  std::array<std::int64_t,2> reservations{};
-  for(const auto& source:w.sources){add(source.id); if(source.amount<0||source.capacity<=0||source.amount>source.capacity||source.reserved<0||source.reserved>source.amount||source.refill_amount<0||source.refill_interval==0) throw std::invalid_argument("invalid food source");}
   auto passable=[&](sim::GridPos p){return p.x>=0&&p.x<sim::Grid::kWidth&&p.y>=0&&p.y<sim::Grid::kHeight&&sim::is_passable(w.terrain[static_cast<std::size_t>(p.y*sim::Grid::kWidth+p.x)]);};
+  std::map<sim::EntityId,std::int64_t> reservations;
+  for(const auto& source:w.sources){add(source.id); reservations[source.id]=0; if(source.amount<0||source.capacity<=0||source.amount>source.capacity||source.reserved<0||source.reserved>source.amount||!passable(source.position)) throw std::invalid_argument("invalid food source");}
   bool queen=false; sim::EntityId previous=0;
-  for(const auto& actor:w.actors){add(actor.identity.id); if(actor.identity.id<=previous) throw std::invalid_argument("actors are not in stable id order"); previous=actor.identity.id; if(!passable(actor.position.cell())||actor.cargo.amount<0||actor.worker!=(actor.ant.kind==sim::AntKind::Worker)) throw std::invalid_argument("invalid actor state"); if(!actor.worker){if(actor.ant.kind==sim::AntKind::Queen){if(queen) throw std::invalid_argument("multiple queens");queen=true;}continue;} if(actor.movement.next_cell>actor.movement.path.size()||actor.movement.path.size()>cells||actor.movement.speed_residual<0||actor.movement.speed_residual>=sim::kTicksPerSecond) throw std::invalid_argument("invalid movement state"); if(actor.path_valid) for(const auto p:actor.movement.path) if(!passable(p)) throw std::invalid_argument("current path crosses an impassable cell"); if(actor.forager.source_index<-1||actor.forager.source_index>1||actor.forager.reserved_amount<0) throw std::invalid_argument("invalid reservation"); if(actor.forager.source_index>=0) reservations[static_cast<std::size_t>(actor.forager.source_index)]+=actor.forager.reserved_amount;}
+  for(const auto& actor:w.actors){add(actor.identity.id); if(actor.identity.id<=previous) throw std::invalid_argument("actors are not in stable id order"); previous=actor.identity.id; if(!passable(actor.position.cell())||actor.cargo.amount<0||actor.worker!=(actor.ant.kind==sim::AntKind::Worker)) throw std::invalid_argument("invalid actor state"); if(!actor.worker){if(actor.ant.kind==sim::AntKind::Queen){if(queen) throw std::invalid_argument("multiple queens");queen=true;}continue;} if(actor.movement.next_cell>actor.movement.path.size()||actor.movement.path.size()>cells||actor.movement.speed_residual<0||actor.movement.speed_residual>=sim::kTicksPerSecond) throw std::invalid_argument("invalid movement state"); if(actor.path_valid) for(const auto p:actor.movement.path) if(!passable(p)) throw std::invalid_argument("current path crosses an impassable cell"); if(actor.forager.reserved_amount<0) throw std::invalid_argument("invalid reservation"); if(actor.forager.reserved_amount>0){const auto slot=reservations.find(actor.forager.source_id); if(slot==reservations.end()) throw std::invalid_argument("reservation names a site that is gone"); slot->second+=actor.forager.reserved_amount;}}
   if(queen!=w.queen_alive) throw std::invalid_argument("queen state mismatch");
-  for(std::size_t i=0;i<2;++i) if(reservations[i]!=w.sources[i].reserved) throw std::invalid_argument("source reservation mismatch");
+  for(const auto& source:w.sources) if(reservations[source.id]!=source.reserved) throw std::invalid_argument("source reservation mismatch");
+  for(const auto& room:w.rooms) if(!sim::within_envelope(room.centre,w.home)) throw std::invalid_argument("room lies outside the excavation envelope");
   for(const auto& b:w.brood){add(b.id);if(!passable(b.position)||b.target==0||b.progress>b.target) throw std::invalid_argument("invalid brood state");}
   for(const auto& c:w.corpses){add(c.id);if(!passable(c.position)) throw std::invalid_argument("invalid corpse position");}
   for(const auto& d:w.dropped_food){add(d.id);if(!passable(d.position)||d.amount<=0) throw std::invalid_argument("invalid dropped cargo");}
@@ -234,6 +236,78 @@ void migrate_v1_to_v2(json& document) {
   world["egg_assignment_counter"] = 0;
   world.at("stats")["gynes_born"] = 0;
   for (json& item : world.at("brood")) item["role"] = static_cast<int>(sim::BroodRole::Worker);
+}
+
+// Schema 2 stocked two forage sites that refilled forever, dug wandering faces, and had no rooms.
+// Sites become finite and already known, the faces are dropped, and the colony is given the
+// founding room set at its usual offsets — where the old nest already has the space the rooms open
+// complete, and where it does not the colony digs them out, which is the same work it would do for
+// any room it decided it needed.
+void migrate_v2_to_v3(json& document) {
+  document["schema_version"] = 3;
+  if (document.at("run").is_null()) return;
+  json& world = document.at("run").at("world");
+  const sim::GridPos home = read_position(world.at("home"));
+  const auto tick = world.at("tick").get<sim::Tick>();
+  const std::uint64_t seed = world.at("seed").get<std::uint64_t>();
+
+  std::vector<sim::EntityId> source_ids;
+  for (json& source : world.at("sources")) {
+    source["known"] = true;
+    source["appeared"] = 0;
+    source.erase("refill_amount");
+    source.erase("refill_interval");
+    source.erase("next_refill");
+    source_ids.push_back(source.at("id").get<sim::EntityId>());
+  }
+  world.at("rng")["world_state"] = sim::mix_seed(seed ^ 0xF0DDEEULL);
+  world.at("rng")["world_increment"] = sim::mix_seed(seed ^ 0x5EED1EULL) | 1ULL;
+  world.erase("dig_faces");
+  world.erase("frontiers_valid");
+  world["next_source_spawn"] = tick + 60ULL * sim::kTicksPerSecond;
+  world["recruiting_source"] = 0;
+  world["recruit_until"] = 0;
+  // Where the old nest already has the space, the room opens finished; where it does not, the
+  // colony digs it out, which is the same work it would do for any room it decided it needed.
+  const auto& terrain = world.at("terrain");
+  const auto material_at = [&terrain](const sim::GridPos cell) {
+    if (cell.x < 0 || cell.x >= sim::Grid::kWidth || cell.y < 0 || cell.y >= sim::Grid::kHeight) {
+      return sim::Material::Bedrock;
+    }
+    return static_cast<sim::Material>(
+        terrain[static_cast<std::size_t>(cell.y * sim::Grid::kWidth + cell.x)].get<int>());
+  };
+  json rooms = json::array();
+  const auto room = [&](const int dx, const int dy, const sim::RoomKind kind) {
+    const sim::Room shape{{home.x + dx, home.y + dy},
+                          static_cast<std::uint8_t>(sim::kRoomStartRadius), kind, false};
+    bool carved = true;
+    for (int y = -sim::kRoomStartRadius; y <= sim::kRoomStartRadius && carved; ++y) {
+      for (int x = -sim::kRoomStartRadius; x <= sim::kRoomStartRadius; ++x) {
+        const sim::GridPos cell{shape.centre.x + x, shape.centre.y + y};
+        if (!shape.contains(cell) || !sim::within_envelope(cell, home)) continue;
+        if (sim::is_diggable(material_at(cell))) { carved = false; break; }
+      }
+    }
+    rooms.push_back({{"centre", json::array({shape.centre.x, shape.centre.y})},
+                     {"radius", sim::kRoomStartRadius},
+                     {"kind", enum_value(kind)},
+                     {"complete", carved}});
+  };
+  room(0, 16, sim::RoomKind::Nursery);
+  room(-18, 10, sim::RoomKind::Granary);
+  world["rooms"] = std::move(rooms);
+
+  for (json& actor : world.at("actors")) {
+    if (!actor.at("worker").get<bool>()) continue;
+    json& forager = actor.at("forager");
+    const int index = forager.value("source_index", -1);
+    forager.erase("source_index");
+    forager["source_id"] =
+        index >= 0 && static_cast<std::size_t>(index) < source_ids.size() ? source_ids[static_cast<std::size_t>(index)] : 0;
+    if (!forager.contains("store_cell")) forager["store_cell"] = json::array({0, 0});
+    forager["scout_target"] = json::array({0, 0});
+  }
 }
 
 json profile_json(const game::ProfileSnapshot& p) {
@@ -270,6 +344,7 @@ DecodeResult decode_profile(const std::string_view document) {
     const std::uint32_t version=parsed.at("schema_version").get<std::uint32_t>();
     if(version>game::kCurrentSchemaVersion) throw std::invalid_argument("unsupported schema_version " + std::to_string(version));
     if(version==1) migrate_v1_to_v2(parsed);
+    if(version<=2) migrate_v2_to_v3(parsed);
     return {read_profile(parsed),{}};
   }
   catch(const std::exception& error){return {std::nullopt,error.what()};}

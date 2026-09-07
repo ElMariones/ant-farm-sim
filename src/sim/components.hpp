@@ -12,7 +12,8 @@ namespace ant::sim {
 
 enum class AntKind : std::uint8_t { Queen, Worker, WingedQueen };
 // Storing is the leg from the nest entrance to the actual heap the load belongs on.
-enum class ForageState : std::uint8_t { AtHome, ToSource, Returning, WaitingForStorage, Storing };
+// Scouting is the search for a site the colony does not yet know about.
+enum class ForageState : std::uint8_t { AtHome, ToSource, Returning, WaitingForStorage, Storing, Scouting };
 enum class Nutrient : std::uint8_t { Carbohydrate, Protein };
 enum class CargoKind : std::uint8_t { None, Food, Spoil, Corpse };
 enum class BroodStage : std::uint8_t { Egg, Larva, Pupa };
@@ -54,13 +55,16 @@ struct Movement {
 
 struct Forager {
   ForageState state{ForageState::AtHome};
-  int source_index{-1};
+  // Sites come and go, so a forager holds the site's stable id rather than a slot number.
+  EntityId source_id{};
   std::int64_t reserved_amount{};
   Tick reservation_expiry{};
   Tick retry_after{};
   // The heap this load is being carried to. Held for the whole delivery: re-picking the nearest
   // heap every tick made a crowd of foragers chase each other's targets and never arrive.
   GridPos store_cell{};
+  // Where a scout is currently heading along the surface.
+  GridPos scout_target{};
 };
 
 struct WorkerMind {

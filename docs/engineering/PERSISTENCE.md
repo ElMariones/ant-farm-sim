@@ -95,3 +95,26 @@ recoverable from a file that lacks it:
 `Material` gained `Stone` and `ForageState` gained `Storing`, both appended, so existing values keep
 their meaning. A file written by this version is not readable by an older binary; that direction was
 never promised.
+
+## Schema 3 — rooms and finite food (T014f)
+
+Schema 3 could not be an additive change: forage sites became a variable-length list with an end,
+foragers name a site by its stable id rather than a slot, and the wandering dig faces were replaced
+by the room list that is now the colony's whole reason to excavate.
+
+- `sources` is a list of at most `kMaxFoodSources`, each with `known` and `appeared` and no refill.
+- `rooms` replaces `dig_faces`: centre, radius, kind and whether it is finished.
+- `rng` gained a `world` stream, which decides where and when sites appear, so a colony that
+  behaves differently still meets the same food.
+- `next_source_spawn`, `recruiting_source` and `recruit_until` carry the appearance schedule and
+  the live recruitment alert.
+- `actors[].forager` carries `source_id` and `scout_target` in place of `source_index`.
+- `frontiers_valid` is gone; the connectivity survey is derived from the grid on load.
+
+A schema 2 profile migrates in memory: its two sites become finite and already known, its foragers'
+slot numbers are mapped to the ids of those sites, the faces are dropped, and the colony is given
+the founding room set at its usual offsets. Where the old nest already has the space the rooms open
+finished; where it does not, the colony digs them out, which is the same work it would do for any
+room it decided it needed. Migration cannot invent an appearance schedule the old format never had,
+so the restored colony continues at the same tick with the same ground, ants, brood and food, but
+not with a bit-identical canonical hash; the migration test asserts exactly that.

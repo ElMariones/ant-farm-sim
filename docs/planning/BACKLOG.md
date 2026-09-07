@@ -28,6 +28,7 @@ The [audit and design guide](NEXT_STEPS.md) defines source findings, implementat
 | T014b | Subtle stable size/color/gait variation using shared render/pick poses | T003b | Zoom-tier native captures, stable reload appearance, unchanged sim state |
 | T006b — complete | Separate useful chamber capacity from transit air, compatibility accounting | T006a | No double-granted capacity on migration/reload; reachable-space invariants |
 | T014e — complete | Mineable roots, permanent stone, physical food and brood placement, reworked forage sites, pointer controls and icons on every action | T006b | Granary sum invariant, root/stone digging tests, brood-in-nursery test, round-trip equality, native captures |
+| T014f — complete | Purpose-built rooms with widen-or-build demand, finite discoverable forage sites, scouting and recruitment | T014e | Room geometry and dig-order tests, scouting and discovery test, five-seed survival, schema 3 migration |
 | T013a | Re-baseline geometry/motion, affordable first trait, delayed flight and long-lived colony policies | T006b, T003b | Five seeds × both policies, tier-I local benefit measurement, larger-payout and no-flight evidence |
 | T014c — partial | Pointer/keyboard flight confirmation, shop resume, save failure and normal defeat restart | T014a, T013a | Actual cancel/commit/shop/reload/new-colony flow with both input methods |
 | T014d | Onboarding, trends, four clear cards, scaling and reduced motion | T014b, T014c | Required scenes, minimum-size/scaling/focus review; limitations recorded |

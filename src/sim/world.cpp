@@ -37,11 +37,15 @@ World::World(const std::uint64_t seed, const TraitModifiers traits)
     : seed_(seed), grid_(Material::Soil),
       behavior_rng_(mix_seed(seed ^ 0xB3A4107ULL), mix_seed(seed ^ 0x515EEDULL)),
       lifecycle_rng_(mix_seed(seed ^ 0x11FEC1EULL), mix_seed(seed ^ 0xA63ULL)),
+      world_rng_(mix_seed(seed ^ 0xF0DDEEULL), mix_seed(seed ^ 0x5EED1EULL)),
       dig_work_(static_cast<std::size_t>(Grid::kWidth * Grid::kHeight)) {
   GeneratedTerrain generated = generate_terrain(seed);
   grid_ = std::move(generated.grid); home_ = generated.home;
-  sources_[0] = {next_id_++, generated.source_positions[0], Nutrient::Carbohydrate, 100'000, 100'000, 0, 800, 20, 20};
-  sources_[1] = {next_id_++, generated.source_positions[1], Nutrient::Protein, 100'000, 100'000, 0, 400, 20, 20};
+  // The colony opens knowing two sites; everything after that has to be found.
+  sources_.push_back({next_id_++, generated.source_positions[0], Nutrient::Carbohydrate, 140'000, 140'000, 0, true, 0});
+  sources_.push_back({next_id_++, generated.source_positions[1], Nutrient::Protein, 140'000, 140'000, 0, true, 0});
+  next_source_spawn_ = static_cast<Tick>(40 + world_rng_.bounded(31U)) * kTicksPerSecond;
+  for (const Room& room : generated.rooms) nest_plan_.found(room);
   traits_ = traits;
   refresh_home_field(); refresh_zones();
   // The founding stock is placed in real cells, so the colony starts with visible heaps rather
@@ -60,6 +64,7 @@ World::World(const WorldSnapshot& snapshot)
       stats_(snapshot.stats),
       behavior_rng_(Pcg32::restore(snapshot.behavior_rng_state, snapshot.behavior_rng_increment)),
       lifecycle_rng_(Pcg32::restore(snapshot.lifecycle_rng_state, snapshot.lifecycle_rng_increment)),
+      world_rng_(Pcg32::restore(snapshot.world_rng_state, snapshot.world_rng_increment)),
       task_diagnostics_(snapshot.task_diagnostics),
       dig_work_(snapshot.dig_work), brood_(snapshot.brood), corpses_(snapshot.corpses),
       dropped_food_(snapshot.dropped_food), granary_(snapshot.granary),
@@ -70,6 +75,10 @@ World::World(const WorldSnapshot& snapshot)
       decline_(snapshot.decline), extinct_(snapshot.extinct), focus_(snapshot.focus),
       adaptation_levels_(snapshot.adaptation_levels), traits_(snapshot.traits),
       mature_(snapshot.mature), egg_assignment_counter_(snapshot.egg_assignment_counter) {
+  next_source_spawn_ = snapshot.next_source_spawn;
+  recruiting_source_ = snapshot.recruiting_source;
+  recruit_until_ = snapshot.recruit_until;
+  nest_plan_.restore(snapshot.rooms);
   if (snapshot.terrain.size() != static_cast<std::size_t>(Grid::kWidth * Grid::kHeight) ||
       dig_work_.size() != snapshot.terrain.size()) throw std::invalid_argument("snapshot grid size mismatch");
   for (int y = 0; y < Grid::kHeight; ++y) for (int x = 0; x < Grid::kWidth; ++x) {
@@ -106,8 +115,6 @@ World::World(const WorldSnapshot& snapshot)
     }
     ordered_entities_.push_back(entity);
   }
-  dig_plan_.restore(snapshot.dig_faces);
-  frontier_revision_ = snapshot.frontiers_valid ? grid_.navigation_revision() : 0;
   for (const ActorState& actor : snapshot.actors) {
     if (actor.cargo.kind == CargoKind::Food && actor.cargo.amount > 0) {
       carried_food_[static_cast<std::size_t>(actor.cargo.nutrient)] += actor.cargo.amount;
@@ -147,43 +154,146 @@ void World::spawn_workers() {
   for (std::size_t i = 0; i < count; ++i) { const GridPos offset = offsets[i % offsets.size()]; spawn_worker({home_.x + offset.x, home_.y + offset.y}); registry_.get<Life>(ordered_entities_.back()).age = static_cast<Tick>(i) * 24U * kTicksPerSecond; }
 }
 
-void World::refill_sources() {
-  for (FoodSource& source : sources_) while (tick_ >= source.next_refill) {
-    const std::int64_t before = source.amount; source.amount = std::min(source.capacity, source.amount + source.refill_amount);
-    stats_.external_refill += source.amount - before; source.next_refill += source.refill_interval;
+// The open cell resting on the ground in this column: the turf, or the colony's own spoil.
+int World::surface_row(const int x) const {
+  for (int y = 4; y < 44; ++y) {
+    if (!is_passable(grid_.at({x, y}))) return y - 1;
   }
+  return 31;
+}
+
+FoodSource* World::find_source(const EntityId id) {
+  const auto found = std::find_if(sources_.begin(), sources_.end(),
+                                  [id](const FoodSource& source) { return source.id == id; });
+  return found == sources_.end() ? nullptr : &*found;
+}
+
+const FoodSource* World::find_source(const EntityId id) const {
+  const auto found = std::find_if(sources_.begin(), sources_.end(),
+                                  [id](const FoodSource& source) { return source.id == id; });
+  return found == sources_.end() ? nullptr : &*found;
+}
+
+bool World::knows_any_food() const {
+  return std::any_of(sources_.begin(), sources_.end(), [](const FoodSource& source) {
+    return source.known && source.amount > source.reserved;
+  });
+}
+
+// Somebody should be out looking whenever the colony is short of a food it has nowhere left to
+// collect. A larder full of protein is no help to a colony that has run out of sugar.
+bool World::wants_scouts() const {
+  for (const Nutrient nutrient : {Nutrient::Carbohydrate, Nutrient::Protein}) {
+    const std::int64_t target = capacity_for(nutrient) / 2;
+    const std::size_t slot = static_cast<std::size_t>(nutrient);
+    if (target <= 0 || store_for(nutrient) + carried_food_[slot] >= target) continue;
+    const bool available = std::any_of(sources_.begin(), sources_.end(),
+        [nutrient](const FoodSource& source) {
+          return source.known && source.nutrient == nutrient && source.amount > source.reserved;
+        });
+    if (!available) return true;
+  }
+  return false;
+}
+
+// A site appears somewhere along the surface, resting on whatever the ground level is there, so it
+// sits on the turf or on the colony's own spoil rather than floating.
+void World::place_food_source() {
+  // Within a day's walk of the entrance, so a scout can plausibly find it.
+  const int first = std::max(8, home_.x - 170);
+  const int span = std::min(Grid::kWidth - 9, home_.x + 170) - first;
+  for (int attempt = 0; attempt < 12; ++attempt) {
+    const int x = first + static_cast<int>(world_rng_.bounded(static_cast<std::uint32_t>(span)));
+    if (std::abs(x - home_.x) < 8) continue; // never on top of the entrance
+    const GridPos position{x, surface_row(x)};
+    if (position.y < 4) continue;
+    if (!grid_.walkable(position)) continue;
+    if (std::any_of(sources_.begin(), sources_.end(), [position](const FoodSource& source) {
+          return std::abs(source.position.x - position.x) < 14;
+        })) continue;
+    // The surface keeps roughly twice as many sugar sites as protein ones, matching the ratio a
+    // colony eats them in. Protein sites are barely touched and would otherwise sit there holding
+    // every slot while the colony starved for sugar.
+    const int sugar = static_cast<int>(std::count_if(sources_.begin(), sources_.end(),
+        [](const FoodSource& source) { return source.nutrient == Nutrient::Carbohydrate; }));
+    const int protein = static_cast<int>(sources_.size()) - sugar;
+    const Nutrient nutrient = sugar < protein * 2      ? Nutrient::Carbohydrate
+                              : sugar > protein * 2 + 1 ? Nutrient::Protein
+                              : world_rng_.bounded(3U) == 0U ? Nutrient::Protein
+                                                             : Nutrient::Carbohydrate;
+    const std::int64_t amount = 60'000 + static_cast<std::int64_t>(world_rng_.bounded(100'001U));
+    sources_.push_back({next_id_++, position, nutrient, amount, amount, 0, false, tick_});
+    stats_.external_refill += amount;
+    return;
+  }
+}
+
+void World::spawn_food_sources() {
+  while (tick_ >= next_source_spawn_) {
+    next_source_spawn_ += static_cast<Tick>(30 + world_rng_.bounded(41U)) * kTicksPerSecond;
+    if (sources_.size() < kMaxFoodSources) place_food_source();
+  }
+}
+
+void World::retire_spent_sources() {
+  const std::size_t before = sources_.size();
+  sources_.erase(std::remove_if(sources_.begin(), sources_.end(), [this](const FoodSource& source) {
+                   if (source.amount <= 0 && source.reserved <= 0) return true;
+                   // What the colony never found simply rots where it fell, so an unreachable
+                   // corner of the surface cannot silently hold every site the world has to offer.
+                   if (source.known || tick_ < source.appeared + kSourceLifetime) return false;
+                   stats_.decayed_food += source.amount;
+                   return true;
+                 }), sources_.end());
+  stats_.sources_exhausted += before - sources_.size();
+}
+
+// One ant finding food is the colony finding food: the site becomes known, a strong trail marks it,
+// and every forager choosing where to go next is steered onto it while the alert lasts.
+void World::discover_source(FoodSource& source) {
+  source.known = true;
+  recruiting_source_ = source.id;
+  recruit_until_ = tick_ + kRecruitmentTicks;
+  trails_.deposit(source.position, 60'000);
+  ++stats_.sources_found;
 }
 void World::refresh_home_field() { if (home_field_.revision() != grid_.navigation_revision()) home_field_.rebuild(grid_, home_); }
 
 void World::refresh_zones() {
-  if (zone_revision_ == grid_.navigation_revision()) return;
+  if (zone_revision_ == grid_.navigation_revision() && zone_rooms_version_ == rooms_version_) return;
   zone_revision_ = grid_.navigation_revision();
+  zone_rooms_version_ = rooms_version_;
   nursery_cells_.clear();
   store_cells_.clear();
   const std::size_t cell_count = static_cast<std::size_t>(Grid::kWidth * Grid::kHeight);
   nursery_mask_.assign(cell_count, 0);
+  // Which room, if any, owns each cell. Brood and grain live in the rooms the colony dug for them
+  // and nowhere else, so a corridor stays a corridor.
+  std::vector<std::uint8_t> owner(cell_count, 0);
+  for (const Room& room : nest_plan_.rooms()) {
+    const int reach = room.radius;
+    for (int dy = -reach; dy <= reach; ++dy) {
+      for (int dx = -reach; dx <= reach; ++dx) {
+        const GridPos cell{room.centre.x + dx, room.centre.y + dy};
+        if (!grid_.in_bounds(cell) || !room.contains(cell)) continue;
+        owner[grid_index(cell)] = room.kind == RoomKind::Nursery ? 1 : 2;
+      }
+    }
+  }
   std::vector<std::uint8_t> visited(cell_count);
   std::queue<GridPos> queue;
   queue.push(home_);
   visited[grid_index(home_)] = 1;
+  connected_nest_air_ = 0;
   while (!queue.empty()) {
     const GridPos cell = queue.front();
     queue.pop();
-    const int reach = std::abs(cell.x - home_.x) + std::abs(cell.y - home_.y);
-    if (reach <= kNurseryRadius) {
+    ++connected_nest_air_;
+    if (owner[grid_index(cell)] == 1) {
       nursery_cells_.push_back(cell);
       nursery_mask_[grid_index(cell)] = 1;
-    } else {
-      // Only a real room stores food. A three-wide corridor can never reach sixteen open cells in
-      // its five-by-five neighbourhood, so passages stay clear for traffic and chambers fill up.
-      int open = 0;
-      for (int dy = -2; dy <= 2; ++dy) {
-        for (int dx = -2; dx <= 2; ++dx) {
-          const GridPos probe{cell.x + dx, cell.y + dy};
-          if (grid_.in_bounds(probe) && grid_.at(probe) == Material::Air) ++open;
-        }
-      }
-      if (open >= 16) store_cells_.push_back(cell);
+    } else if (owner[grid_index(cell)] == 2) {
+      store_cells_.push_back(cell);
     }
     for (const GridPos step : kNeighbors) {
       const GridPos next{cell.x + step.x, cell.y + step.y};
@@ -228,19 +338,26 @@ bool World::in_nursery(const GridPos cell) const {
   return grid_.in_bounds(cell) && !nursery_mask_.empty() && nursery_mask_[grid_index(cell)] != 0;
 }
 
+bool World::store_cells_left(const Nutrient nutrient) const {
+  const std::int64_t allowed = capacity_for(nutrient) / kGrainsPerStoreCell;
+  const std::int64_t used = std::count_if(granary_.begin(), granary_.end(),
+      [nutrient](const FoodPile& pile) { return pile.amount > 0 && pile.nutrient == nutrient; });
+  return used < allowed;
+}
+
 bool World::accepts_food(const GridPos cell, const Nutrient nutrient) const {
   const FoodPile* pile = pile_at(cell);
-  if (pile == nullptr) return grid_.in_bounds(cell) && grid_.at(cell) == Material::Air;
-  return pile->amount == 0 ||
-         (pile->nutrient == nutrient && pile->amount < kGrainsPerStoreCell);
+  if (pile != nullptr && pile->amount > 0) {
+    return pile->nutrient == nutrient && pile->amount < kGrainsPerStoreCell;
+  }
+  if (!grid_.in_bounds(cell) || grid_.at(cell) != Material::Air) return false;
+  // A cell holding nothing only counts while the nutrient still has cells to spare. A forager
+  // holds its target for the whole delivery, so without this the last free cells could be promised
+  // to more ants than the chambers can hold.
+  return store_cells_left(nutrient);
 }
 
 std::optional<GridPos> World::store_target(const Nutrient nutrient, const EntityId bias) const {
-  const std::int64_t allowed = capacity_for(nutrient) / kGrainsPerStoreCell;
-  std::int64_t used = 0;
-  for (const FoodPile& pile : granary_) {
-    if (pile.amount > 0 && pile.nutrient == nutrient) ++used;
-  }
   // Several near candidates rather than one, so simultaneous deliveries spread over neighbouring
   // heaps instead of every forager converging on the same cell.
   constexpr std::size_t kCandidates = 4;
@@ -258,7 +375,7 @@ std::optional<GridPos> World::store_target(const Nutrient nutrient, const Entity
     if (partial == kCandidates && free == kCandidates) break;
   }
   if (partial > 0) return topping_up[static_cast<std::size_t>(bias % partial)];
-  if (used < allowed && free > 0) return empty[static_cast<std::size_t>(bias % free)];
+  if (free > 0 && store_cells_left(nutrient)) return empty[static_cast<std::size_t>(bias % free)];
   return std::nullopt;
 }
 
@@ -272,7 +389,10 @@ std::int64_t World::deposit_food(const GridPos cell, const Nutrient nutrient,
   }
   if (pile->amount == 0) pile->nutrient = nutrient;
   if (pile->nutrient != nutrient) return 0;
-  const std::int64_t placed = std::min(amount, kGrainsPerStoreCell - pile->amount);
+  // Never more than the cell holds, and never more than the colony has chambers for.
+  const std::int64_t placed = std::min({amount, kGrainsPerStoreCell - pile->amount,
+                                        capacity_for(nutrient) - store_for(nutrient)});
+  if (placed <= 0) return 0;
   pile->amount += placed;
   store_for(nutrient) += placed;
   return placed;
@@ -310,7 +430,7 @@ void World::store_cargo(const entt::entity entity, int& path_budget) {
   if (cargo.kind != CargoKind::Food || cargo.amount <= 0) {
     cargo = Cargo{};
     forager.state = ForageState::AtHome;
-    forager.source_index = -1;
+    forager.source_id = 0;
     clear_path(movement);
     return;
   }
@@ -339,7 +459,7 @@ void World::store_cargo(const entt::entity entity, int& path_budget) {
   if (cargo.amount == 0) {
     cargo.kind = CargoKind::None;
     forager.state = ForageState::AtHome;
-    forager.source_index = -1;
+    forager.source_id = 0;
     ++stats_.completed_round_trips;
     clear_path(movement);
   }
@@ -347,7 +467,12 @@ void World::store_cargo(const entt::entity entity, int& path_budget) {
 
 
 void World::step() {
-  refill_sources(); refresh_home_field();
+  spawn_food_sources(); retire_spent_sources(); refresh_home_field();
+  scouting_workers_ = static_cast<int>(std::count_if(ordered_entities_.begin(), ordered_entities_.end(),
+      [this](const entt::entity e) {
+        return registry_.all_of<Forager>(e) &&
+               registry_.get<Forager>(e).state == ForageState::Scouting;
+      }));
   for (const entt::entity e : ordered_entities_) { Position& p = registry_.get<Position>(e); p.previous_x_subcells = p.x_subcells; p.previous_y_subcells = p.y_subcells; }
   if (tick_ % kTicksPerSecond == 0) recompute_needs_and_dig_plan();
   task_diagnostics_.workers_by_task.fill(0);
@@ -361,34 +486,37 @@ void World::run_ticks(const Tick count) { for (Tick i = 0; i < count; ++i) step(
 
 void World::recompute_needs_and_dig_plan() {
   refresh_zones();
-  if (frontier_revision_ != grid_.navigation_revision()) {
-    frontier_revision_ = grid_.navigation_revision();
-    std::vector<std::uint8_t> visited(static_cast<std::size_t>(Grid::kWidth * Grid::kHeight)); std::queue<GridPos> queue;
-    queue.push(home_); visited[grid_index(home_)] = 1; connected_nest_air_ = 0; dig_candidates_.clear();
-    while (!queue.empty()) {
-      const GridPos p = queue.front(); queue.pop(); if (grid_.at(p) != Material::Air) continue; ++connected_nest_air_;
-      bool touches_ground = false;
-      for (const GridPos d : kNeighbors) { const GridPos n{p.x + d.x, p.y + d.y}; if (!grid_.in_bounds(n)) continue;
-        if (grid_.at(n) == Material::Air && visited[grid_index(n)] == 0) { visited[grid_index(n)] = 1; queue.push(n); }
-        else if (is_diggable(grid_.at(n)) && within_envelope(n, home_)) touches_ground = true;
-      }
-      // A face starts from open ground it can stand in, not from the wall itself, so its heading
-      // has somewhere to come from.
-      if (touches_ground && within_envelope(p, home_)) dig_candidates_.push_back(p);
-    }
+  // Brood needs a cradle, so the nursery is no larger than the cells the brood rooms actually have.
+  nursery_capacity_ = std::max(12, static_cast<int>(nursery_cells_.size()));
+  // The colony builds when it is running out of somewhere to put things: a fuller brood room means
+  // another brood room, a fuller granary means another granary.
+  const bool wants_nursery = brood_.size() * 2 >= static_cast<std::size_t>(nursery_capacity_);
+  const bool wants_granary = stores_.carbohydrate * 2 >= stores_.carbohydrate_capacity ||
+                             stores_.protein * 2 >= stores_.protein_capacity ||
+                             store_cells_.empty();
+  const std::size_t rooms_before = nest_plan_.rooms().size();
+  const bool was_building = !nest_plan_.idle();
+  nest_plan_.update(grid_, home_, seed_, wants_nursery, wants_granary);
+  if (nest_plan_.rooms().size() != rooms_before) {
+    ++rooms_version_;
+    ++stats_.rooms_built;
+  } else if (was_building != !nest_plan_.idle()) {
+    ++rooms_version_;
   }
-  // Brood needs a cradle, so the nursery is no larger than the cells that exist around the queen.
-  nursery_capacity_ =
-      std::max(12, std::min(connected_nest_air_ / 4, static_cast<int>(nursery_cells_.size())));
-  // A chamber is dug when the colony is out of room for brood or for grain, which is what turns a
-  // full larder into new excavation rather than idle workers.
-  const bool wants_chamber = brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ||
-                             stores_.carbohydrate * 4 >= stores_.carbohydrate_capacity * 3 ||
-                             stores_.protein * 4 >= stores_.protein_capacity * 3;
-  dig_plan_.update(grid_, home_, seed_, dig_candidates_, wants_chamber);
-  const auto shortage = [](const std::int64_t amount, const std::int64_t target) { return amount >= target ? std::uint16_t{0} : static_cast<std::uint16_t>(((target - amount) * 1'000) / target); };
-  task_diagnostics_.stimuli[0] = std::max(shortage(stores_.carbohydrate, stores_.carbohydrate_capacity / 2), shortage(stores_.protein, stores_.protein_capacity / 2));
-  task_diagnostics_.stimuli[1] = dig_plan_.idle() ? 0 : static_cast<std::uint16_t>(brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ? 850 : 380);
+
+  const auto shortage = [](const std::int64_t amount, const std::int64_t target) { return target <= 0 ? std::uint16_t{0} : amount >= target ? std::uint16_t{0} : static_cast<std::uint16_t>(((target - amount) * 1'000) / target); };
+  // The colony forages to fill the granary it has, not to reach a fraction of it. Capacity is now
+  // the room the colony dug, so half of a small larder was a target it started above.
+  const std::uint16_t hunger = std::max(shortage(stores_.carbohydrate, stores_.carbohydrate_capacity), shortage(stores_.protein, stores_.protein_capacity));
+  // A colony with nowhere left to forage still wants somebody looking, so hunger keeps driving the
+  // foraging job; the workers who find no site go scouting or wait.
+  task_diagnostics_.stimuli[0] = hunger;
+  // Half full is a reason to start digging a room; three quarters full is a reason to drop
+  // everything and finish it. A founding colony should be out finding food, not all underground.
+  const bool urgent = brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ||
+                      stores_.carbohydrate * 4 >= stores_.carbohydrate_capacity * 3 ||
+                      stores_.protein * 4 >= stores_.protein_capacity * 3;
+  task_diagnostics_.stimuli[1] = nest_plan_.idle() ? 0 : static_cast<std::uint16_t>(urgent ? 800 : 300);
   const std::size_t uncared = static_cast<std::size_t>(std::count_if(brood_.begin(), brood_.end(), [](const BroodSnapshot& b) { return b.care_remaining == 0; }));
   task_diagnostics_.stimuli[2] = brood_.empty() ? 0 : static_cast<std::uint16_t>((uncared * 1'000U) / brood_.size());
   const std::size_t cleanable = static_cast<std::size_t>(std::count_if(corpses_.begin(), corpses_.end(), [](const CorpseSnapshot& c) { return c.cleanable; }));
@@ -398,15 +526,17 @@ void World::recompute_needs_and_dig_plan() {
 
 void World::choose_task(const entt::entity e) {
   WorkerMind& mind = registry_.get<WorkerMind>(e); const std::int64_t emergency = static_cast<std::int64_t>(ordered_entities_.size()) * 30 + 200;
-  if (stores_.carbohydrate < emergency && sources_[0].amount > sources_[0].reserved) mind.task = Task::Forage;
+  if (stores_.carbohydrate < emergency && knows_any_food()) mind.task = Task::Forage;
   else {
-    const bool food = sources_[0].amount + sources_[1].amount > sources_[0].reserved + sources_[1].reserved;
+    // With nothing known to collect, foraging still draws a few workers out as scouts; the search
+    // is the job when the larder and the map are both empty.
+    const bool food = knows_any_food() || scouting_workers_ < scout_cap();
     const bool clean = !dropped_food_.empty() ||
                        std::any_of(corpses_.begin(), corpses_.end(),
                                    [](const CorpseSnapshot& c) { return c.cleanable; });
     std::array<TaskWeight, 5> weights{{
       {Task::Forage, food ? response_weight(task_diagnostics_.stimuli[0], mind.thresholds[0]) : 0},
-      {Task::Excavate, dig_plan_.idle() ? 0 : response_weight(task_diagnostics_.stimuli[1], mind.thresholds[1])},
+      {Task::Excavate, nest_plan_.idle() ? 0 : response_weight(task_diagnostics_.stimuli[1], mind.thresholds[1])},
       {Task::Nurse, brood_.empty() ? 0 : response_weight(task_diagnostics_.stimuli[2], mind.thresholds[2])},
       {Task::Clean, clean ? response_weight(task_diagnostics_.stimuli[3], mind.thresholds[3]) : 0}, {Task::Idle, 1'000}}};
     for (TaskWeight& weight : weights) {
@@ -418,8 +548,6 @@ void World::choose_task(const entt::entity e) {
     }
     mind.task = choose_weighted_task(weights, behavior_rng_);
   }
-  // Switching task also gives up any dig face this worker was committed to.
-  release_dig_claim(mind);
   mind.committed_until = tick_ + 5 * kTicksPerSecond; mind.has_target = false; mind.action_ticks = 0;
 }
 
@@ -431,7 +559,7 @@ void World::process_worker(const entt::entity e, int& path_budget) {
     ++task_diagnostics_.workers_by_task[static_cast<std::size_t>(Task::Forage)];
     return;
   }
-  if (((tick_ + registry_.get<Identity>(e).id) % 10 == 0 && tick_ >= mind.committed_until) || (mind.task == Task::Excavate && dig_plan_.idle()) || (mind.task == Task::Nurse && brood_.empty())) choose_task(e);
+  if (((tick_ + registry_.get<Identity>(e).id) % 10 == 0 && tick_ >= mind.committed_until) || (mind.task == Task::Excavate && nest_plan_.idle()) || (mind.task == Task::Nurse && brood_.empty())) choose_task(e);
   ++task_diagnostics_.workers_by_task[static_cast<std::size_t>(mind.task)];
   if (cargo.kind == CargoKind::Spoil || cargo.kind == CargoKind::Corpse) { deliver_non_food(e); return; }
   if (mind.task != Task::Forage) { Forager& f = registry_.get<Forager>(e); if (f.reserved_amount > 0) release_reservation(f); f.state = ForageState::AtHome; }
@@ -447,54 +575,142 @@ void World::process_forager(const entt::entity e, int& path_budget) {
     f.state = ForageState::Storing;
   }
   if (f.state == ForageState::Storing) { store_cargo(e, path_budget); return; }
+  if (f.state == ForageState::Scouting) { process_scout(e, path_budget); return; }
   if (f.state == ForageState::AtHome) {
     if (cargo.amount > 0) { f.state = ForageState::Returning; m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell(), bias_for(e)); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); }
-    else if (tick_ >= f.retry_after) choose_source(e, path_budget);
+    else if (tick_ >= f.retry_after) {
+      // A few workers go searching for what the colony cannot collect; the rest fetch whatever is
+      // still worth fetching, and wait when there is nothing.
+      if (wants_scouts() && scouting_workers_ < scout_cap()) {
+        f.state = ForageState::Scouting;
+        f.scout_target = {};
+        ++scouting_workers_;
+        clear_path(m);
+      } else if (!choose_source(e, path_budget)) {
+        f.retry_after = tick_ + 40;
+      }
+    }
   }
   if ((f.state == ForageState::ToSource || f.state == ForageState::Returning) && m.path_revision != grid_.navigation_revision()) { ++stats_.navigation_replans; refresh_path(e, path_budget); }
   if ((f.state == ForageState::ToSource || f.state == ForageState::Returning) && move_one_tick(e)) arrive(e, path_budget);
 }
 
-void World::choose_source(const entt::entity e, int& path_budget) {
-  if (path_budget <= 0) return; const EntityId id = registry_.get<Identity>(e).id; Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); const GridPos start = registry_.get<Position>(e).cell();
+int World::scout_cap() const { return std::max(2, living_workers() / 12); }
+
+// Walks the surface looking for a site the colony does not know about. Passing close to one is a
+// discovery, which alerts the whole colony at once.
+void World::process_scout(const entt::entity e, int& path_budget) {
+  Forager& forager = registry_.get<Forager>(e);
+  Movement& movement = registry_.get<Movement>(e);
+  const GridPos here = registry_.get<Position>(e).cell();
+  for (FoodSource& source : sources_) {
+    if (source.known || source.amount <= 0) continue;
+    if (std::abs(source.position.x - here.x) + std::abs(source.position.y - here.y) >
+        kDiscoveryReach) continue;
+    discover_source(source);
+    forager.state = ForageState::AtHome;
+    forager.retry_after = 0;
+    clear_path(movement);
+    return;
+  }
+  if (!wants_scouts()) { // somebody else found it; go and fetch it
+    forager.state = ForageState::AtHome;
+    forager.retry_after = 0;
+    clear_path(movement);
+    return;
+  }
+  const bool arrived = forager.scout_target == GridPos{} || here == forager.scout_target ||
+                       (movement.path.empty() && movement.path_revision == grid_.navigation_revision());
+  if (arrived) {
+    // Out of the nest first, then a short hop further along the surface each time. Sweeping in
+    // steps keeps every leg a short walk and covers the ground between, which is how a searching
+    // ant actually finds anything.
+    if (here.y > kSurfaceFloor - 2) {
+      forager.scout_target = {home_.x, 31};
+    } else {
+      int direction = registry_.get<Identity>(e).id % 2ULL == 0ULL ? -1 : 1;
+      if (here.x < 44) direction = 1;
+      if (here.x > Grid::kWidth - 44) direction = -1;
+      const int stride = 16 + static_cast<int>(behavior_rng_.bounded(20U));
+      const int x = std::clamp(here.x + direction * stride, 8, Grid::kWidth - 9);
+      forager.scout_target = {x, surface_row(x)};
+    }
+    clear_path(movement);
+  }
+  route_to(e, forager.scout_target, path_budget);
+}
+
+bool World::choose_source(const entt::entity e, int& path_budget) {
+  if (path_budget <= 0) return true; // no budget to plan a trip this tick; ask again next one
+  const EntityId id = registry_.get<Identity>(e).id;
+  Forager& f = registry_.get<Forager>(e);
+  Movement& m = registry_.get<Movement>(e);
+  const GridPos start = registry_.get<Position>(e).cell();
   // Follow the nutrient the colony is actually short of, measured against the same 50%-of-capacity
-  // target the foraging stimulus uses and counting food already on its way home. Trails only break
-  // a tie, so a well-worn route to a full larder cannot starve the other nutrient.
+  // target the foraging stimulus uses and counting food already on its way home. A site the colony
+  // is being recruited to outranks all of that while the alert lasts; trails only break a tie.
   const auto shortfall = [this](const Nutrient nutrient) {
-    const std::int64_t target = capacity_for(nutrient) / 2;
+    const std::int64_t target = capacity_for(nutrient);
     if (target <= 0) return std::int64_t{0};
     const std::int64_t have =
         store_for(nutrient) + carried_food_[static_cast<std::size_t>(nutrient)];
     return have >= target ? std::int64_t{0} : (target - have) * 1'000 / target;
   };
-  const std::int64_t first_need = shortfall(sources_[0].nutrient);
-  const std::int64_t second_need = shortfall(sources_[1].nutrient);
-  const std::uint16_t first_trail = trails_.at(sources_[0].position);
-  const std::uint16_t second_trail = trails_.at(sources_[1].position);
-  const int preferred =
-      first_need != second_need
-          ? (first_need > second_need ? 0 : 1)
-          : (first_trail == second_trail ? static_cast<int>(id % 2ULL)
-                                         : (first_trail > second_trail ? 0 : 1));
-  for (int attempt = 0; attempt < 2 && path_budget > 0; ++attempt) {
-    const int source_index = (preferred + attempt) % 2; FoodSource& source = sources_[static_cast<std::size_t>(source_index)];
+  const EntityId recruited = recruiting_source();
+  std::vector<const FoodSource*> ranked;
+  for (const FoodSource& source : sources_) {
+    if (source.known && source.amount > source.reserved) ranked.push_back(&source);
+  }
+  if (ranked.empty()) return false;
+  std::sort(ranked.begin(), ranked.end(), [&](const FoodSource* a, const FoodSource* b) {
+    if ((a->id == recruited) != (b->id == recruited)) return a->id == recruited;
+    const std::int64_t need_a = shortfall(a->nutrient);
+    const std::int64_t need_b = shortfall(b->nutrient);
+    if (need_a != need_b) return need_a > need_b;
+    const std::uint16_t trail_a = trails_.at(a->position);
+    const std::uint16_t trail_b = trails_.at(b->position);
+    if (trail_a != trail_b) return trail_a > trail_b;
+    return a->id < b->id;
+  });
+  // Ants sharing a preference still spread over the top few sites rather than all queueing on one.
+  const std::size_t offset = static_cast<std::size_t>(id % std::min<std::uint64_t>(2, ranked.size()));
+  for (std::size_t attempt = 0; attempt < ranked.size() && path_budget > 0; ++attempt) {
+    FoodSource& source = *find_source(ranked[(attempt + offset) % ranked.size()]->id);
     const std::int64_t carry_capacity =
         2'000 * (100 + 20 * adaptation_levels_[2]) / 100 * (traits_.industry_tier >= 3 ? 120 : 100) / 100;
     const std::int64_t room = capacity_for(source.nutrient) - store_for(source.nutrient) -
                               carried_food_[static_cast<std::size_t>(source.nutrient)] - source.reserved;
-    const std::int64_t reservation = std::min<std::int64_t>({carry_capacity, source.amount - source.reserved, room}); if (reservation <= 0) continue;
-    source.reserved += reservation; f.source_index = source_index; f.reserved_amount = reservation; f.reservation_expiry = tick_ + 1'200; ++stats_.path_requests; --path_budget;
+    const std::int64_t reservation = std::min<std::int64_t>({carry_capacity, source.amount - source.reserved, room});
+    if (reservation <= 0) continue;
+    source.reserved += reservation; f.source_id = source.id; f.reserved_amount = reservation; f.reservation_expiry = tick_ + 1'200; ++stats_.path_requests; --path_budget;
     const PathResult path = find_path(grid_, start, source.position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
-    if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); f.state = ForageState::ToSource; return; }
-    release_reservation(f); f.retry_after = tick_ + 200; if (path.status == PathStatus::BudgetExhausted) return;
+    if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); f.state = ForageState::ToSource; return true; }
+    release_reservation(f);
+    f.retry_after = tick_ + 200;
+    if (path.status == PathStatus::BudgetExhausted) return true;
+    // Nothing connects the nest to that site any more — buried, or cut off by the colony's own
+    // spoil. Give it up rather than planning the same impossible walk for ever.
+    if (FoodSource* lost = find_source(ranked[(attempt + offset) % ranked.size()]->id)) {
+      if (lost->reserved <= 0) {
+        stats_.decayed_food += lost->amount;
+        lost->amount = 0;
+        ++stats_.sources_exhausted;
+      }
+    }
   }
+  // Every known site is spent, unreachable, or holds a nutrient the colony has no room for. That is
+  // the moment to go looking: a larder full of protein is no help to a colony out of sugar.
+  return false;
 }
 
 void World::refresh_path(const entt::entity e, int& path_budget) {
   Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); const GridPos start = registry_.get<Position>(e).cell(); clear_path(m);
   if (f.state == ForageState::Returning) { m.path = home_field_.path_home(grid_, start, bias_for(e)); m.path_revision = grid_.navigation_revision(); return; }
-  if (f.state != ForageState::ToSource || f.source_index < 0 || path_budget <= 0) return; FoodSource& source = sources_[static_cast<std::size_t>(f.source_index)]; ++stats_.path_requests; --path_budget;
-  const PathResult path = find_path(grid_, start, source.position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
+  if (f.state != ForageState::ToSource || path_budget <= 0) return;
+  const FoodSource* source = find_source(f.source_id);
+  if (source == nullptr) { release_reservation(f); f.state = ForageState::AtHome; f.retry_after = tick_ + 40; return; }
+  ++stats_.path_requests; --path_budget;
+  const PathResult path = find_path(grid_, start, source->position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
   if (path.status == PathStatus::Complete) { m.path = path.cells; m.path_revision = grid_.navigation_revision(); }
   else { release_reservation(f); f.state = ForageState::AtHome; f.retry_after = tick_ + 200; }
 }
@@ -528,8 +744,10 @@ bool World::move_one_tick(const entt::entity e) {
 void World::arrive(const entt::entity e, int&) {
   Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); Cargo& cargo = registry_.get<Cargo>(e);
   if (f.state == ForageState::ToSource) {
-    FoodSource& source = sources_[static_cast<std::size_t>(f.source_index)]; const std::int64_t picked = std::min(source.amount, f.reserved_amount); source.amount -= picked; source.reserved -= f.reserved_amount; f.reserved_amount = 0;
-    if (picked <= 0) { f.source_index = -1; f.state = ForageState::AtHome; f.retry_after = tick_ + 100; clear_path(m); return; }
+    FoodSource* found = find_source(f.source_id);
+    if (found == nullptr) { release_reservation(f); f.state = ForageState::AtHome; f.retry_after = tick_ + 40; clear_path(m); return; }
+    FoodSource& source = *found; const std::int64_t picked = std::min(source.amount, f.reserved_amount); source.amount -= picked; source.reserved = std::max<std::int64_t>(0, source.reserved - f.reserved_amount); f.reserved_amount = 0;
+    if (picked <= 0) { f.source_id = 0; f.state = ForageState::AtHome; f.retry_after = tick_ + 100; clear_path(m); return; }
     cargo.kind = CargoKind::Food; cargo.nutrient = source.nutrient; cargo.amount = picked; carried_food_[static_cast<std::size_t>(source.nutrient)] += picked; stats_.picked_up += picked; f.state = ForageState::Returning;
     m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell(), bias_for(e)); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); return;
   }
@@ -540,7 +758,15 @@ void World::arrive(const entt::entity e, int&) {
   }
 }
 
-void World::release_reservation(Forager& f) { if (f.source_index >= 0 && f.reserved_amount > 0) { FoodSource& source = sources_[static_cast<std::size_t>(f.source_index)]; source.reserved = std::max<std::int64_t>(0, source.reserved - f.reserved_amount); } f.source_index = -1; f.reserved_amount = 0; }
+void World::release_reservation(Forager& f) {
+  if (f.reserved_amount > 0) {
+    if (FoodSource* source = find_source(f.source_id)) {
+      source->reserved = std::max<std::int64_t>(0, source->reserved - f.reserved_amount);
+    }
+  }
+  f.source_id = 0;
+  f.reserved_amount = 0;
+}
 
 void World::route_to(const entt::entity e, const GridPos target, int& path_budget) {
   Movement& m = registry_.get<Movement>(e); if (m.next_cell < m.path.size() && m.path_revision == grid_.navigation_revision()) { static_cast<void>(move_one_tick(e)); return; }
@@ -551,17 +777,15 @@ void World::route_to(const entt::entity e, const GridPos target, int& path_budge
 void World::process_excavator(const entt::entity e, int& path_budget) {
   WorkerMind& mind = registry_.get<WorkerMind>(e);
   if (!mind.has_target || !grid_.in_bounds(mind.target) || !is_diggable(grid_.at(mind.target))) {
-    // Give up the old claim before taking a new one, or this worker is counted on two faces.
-    release_dig_claim(mind);
     mind.has_target = false;
-    if (const auto claimed = dig_plan_.claim(grid_, home_)) {
-      mind.target = claimed->cell;
+    if (const std::optional<GridPos> claimed = nest_plan_.claim(grid_, home_)) {
+      mind.target = *claimed;
       mind.has_target = true;
-      // Stay committed long enough to actually get there and take a bite. A face at the far end of
+      // Stay committed long enough to actually get there and take a bite. A room at the far end of
       // the nest is a ten-second walk, and a worker that reconsidered every five seconds turned
       // back before it ever arrived; a face next door still costs nothing extra.
       const GridPos here = registry_.get<Position>(e).cell();
-      const int reach = std::abs(claimed->cell.x - here.x) + std::abs(claimed->cell.y - here.y);
+      const int reach = std::abs(claimed->x - here.x) + std::abs(claimed->y - here.y);
       mind.committed_until = tick_ + static_cast<Tick>(5 + reach / 6) * kTicksPerSecond;
     }
   }
@@ -571,7 +795,7 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
   const std::uint16_t dig_amount = static_cast<std::uint16_t>(
       (100 + 25 * adaptation_levels_[0]) * (traits_.industry_tier >= 1 ? 115 : 100) / 100);
   ++stats_.productive_worker_ticks;
-  if (remaining <= dig_amount) { remaining = 0; grid_.set(mind.target, Material::Air); Cargo& cargo = registry_.get<Cargo>(e); cargo.kind = CargoKind::Spoil; cargo.amount = 1'000; ++stats_.cells_excavated; release_dig_claim(mind); mind.has_target = false; }
+  if (remaining <= dig_amount) { remaining = 0; grid_.set(mind.target, Material::Air); Cargo& cargo = registry_.get<Cargo>(e); cargo.kind = CargoKind::Spoil; cargo.amount = 1'000; ++stats_.cells_excavated; mind.has_target = false; }
   else remaining = static_cast<std::uint16_t>(remaining - dig_amount);
 }
 
@@ -696,8 +920,8 @@ void World::update_biology() {
       // One in five, and only while live winged queens plus winged brood stay under ten.
       if (egg_assignment_counter_ % 5 == 0 && live_winged_queens() + winged_brood() < 10) role = BroodRole::Gyne;
     }
-    const GridPos cradle = nursery_target(0).value_or(home_);
-    brood_.push_back({next_id_++, BroodStage::Egg, cradle, 0, brood_target(BroodStage::Egg, role), 0, 0, role, 0});
+    // The queen lays where she stands. A nurse carries the egg to the brood room from there.
+    brood_.push_back({next_id_++, BroodStage::Egg, home_, 0, brood_target(BroodStage::Egg, role), 0, 0, role, 0});
     ++stats_.eggs_laid; } }
   remove_dead_workers(); for (CorpseSnapshot& corpse : corpses_) { corpse.age += kTicksPerSecond; corpse.cleanable = corpse.age >= 30 * kTicksPerSecond; }
   corpses_.erase(std::remove_if(corpses_.begin(), corpses_.end(), [](const CorpseSnapshot& c) { return c.age >= 300 * kTicksPerSecond; }), corpses_.end());
@@ -748,6 +972,11 @@ bool World::deposit_spoil() {
       const GridPos target{column, 31 - height};
       if (grid_.at(target) != Material::Sky) continue;
       if (cell_is_occupied(target)) continue;
+      // Never tip spoil into a column a forage site stands in: burying the colony's own food would
+      // strand it behind soil it can no longer reach.
+      if (std::any_of(sources_.begin(), sources_.end(), [column](const FoodSource& source) {
+            return std::abs(source.position.x - column) <= 1;
+          })) continue;
       // Favour low piles close to the entrance, so the mound stays a mound.
       const int score = height * 3 + radius;
       if (!found || score < best_score) { found = true; best_score = score; best = target; }
@@ -762,18 +991,14 @@ RouteBias World::bias_for(const entt::entity e) const {
   return route_bias(seed_, registry_.get<Identity>(e).id);
 }
 
-void World::release_dig_claim(const WorkerMind& mind) {
-  if (!mind.has_target) return;
-  if (const auto face = dig_plan_.face_of(grid_, mind.target, home_)) dig_plan_.release(*face);
-}
-
+// One project at a time means a claim is just a headcount, retallied once per tick rather than
+// rescanned per excavator.
 void World::refresh_dig_claims() {
-  dig_plan_.clear_claims();
+  nest_plan_.clear_claims();
   for (const entt::entity entity : ordered_entities_) {
     if (!registry_.all_of<WorkerMind>(entity)) continue;
     const WorkerMind& mind = registry_.get<WorkerMind>(entity);
-    if (mind.task != Task::Excavate || !mind.has_target) continue;
-    if (const auto face = dig_plan_.face_of(grid_, mind.target, home_)) dig_plan_.note_claim(*face);
+    if (mind.task == Task::Excavate && mind.has_target) nest_plan_.note_claim();
   }
 }
 
@@ -839,8 +1064,11 @@ WorldSnapshot World::snapshot() const {
   out.terrain = grid_.cells(); out.sources = sources_; out.stores = stores_; out.stats = stats_;
   out.behavior_rng_state = behavior_rng_.state(); out.behavior_rng_increment = behavior_rng_.increment();
   out.lifecycle_rng_state = lifecycle_rng_.state(); out.lifecycle_rng_increment = lifecycle_rng_.increment();
+  out.world_rng_state = world_rng_.state(); out.world_rng_increment = world_rng_.increment();
+  out.rooms = nest_plan_.rooms(); out.next_source_spawn = next_source_spawn_;
+  out.recruiting_source = recruiting_source_; out.recruit_until = recruit_until_;
   out.trails = trails_.cells(); out.dig_work = dig_work_; out.task_diagnostics = task_diagnostics_;
-  out.dig_faces = dig_plan_.save(); out.brood = brood_; out.corpses = corpses_; out.dropped_food = dropped_food_;
+  out.brood = brood_; out.corpses = corpses_; out.dropped_food = dropped_food_;
   out.granary = granary_;
   out.spoil_mound = spoil_mound_; out.starting_nest_air = starting_nest_air_;
   out.connected_nest_air = connected_nest_air_; out.nursery_capacity = nursery_capacity_;
@@ -848,7 +1076,6 @@ WorldSnapshot World::snapshot() const {
   out.queen_alive = queen_alive_; out.decline = decline_; out.extinct = extinct_;
   out.focus = focus_; out.adaptation_levels = adaptation_levels_;
   out.traits = traits_; out.mature = mature_; out.egg_assignment_counter = egg_assignment_counter_;
-  out.frontiers_valid = frontier_revision_ == grid_.navigation_revision();
   out.actors.reserve(ordered_entities_.size());
   for (const entt::entity entity : ordered_entities_) {
     ActorState actor;
@@ -864,19 +1091,25 @@ WorldSnapshot World::snapshot() const {
 
 std::uint64_t World::canonical_hash() const {
   std::uint64_t hash = 1469598103934665603ULL; hash_value(hash, seed_); hash_value(hash, tick_); hash_value(hash, grid_.material_hash()); hash_value(hash, behavior_rng_.state()); hash_value(hash, lifecycle_rng_.state()); hash_signed(hash, stores_.carbohydrate); hash_signed(hash, stores_.protein); hash_value(hash, trails_.mass()); hash_value(hash, queen_alive_); hash_value(hash, queen_starvation_); hash_value(hash, static_cast<std::uint64_t>(focus_));
-  for (const FoodSource& source : sources_) { hash_signed(hash, source.amount); hash_signed(hash, source.reserved); hash_value(hash, source.next_refill); }
+  for (const FoodSource& source : sources_) { hash_value(hash, source.id); hash_signed(hash, source.amount); hash_signed(hash, source.reserved); hash_value(hash, source.known); }
+  hash_value(hash, next_source_spawn_); hash_value(hash, recruiting_source_); hash_value(hash, recruit_until_); hash_value(hash, world_rng_.state());
+  for (const Room& room : nest_plan_.rooms()) { hash_signed(hash, room.centre.x); hash_signed(hash, room.centre.y); hash_value(hash, room.radius); hash_value(hash, static_cast<std::uint64_t>(room.kind)); hash_value(hash, room.complete); }
   for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); hash_value(hash, id.id); hash_value(hash, static_cast<std::uint64_t>(p.x_subcells)); hash_value(hash, static_cast<std::uint64_t>(p.y_subcells)); hash_signed(hash, cargo.amount); if (registry_.all_of<WorkerMind>(e)) { const WorkerMind& mind = registry_.get<WorkerMind>(e); hash_value(hash, static_cast<std::uint64_t>(mind.task)); hash_value(hash, mind.committed_until); } if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); hash_value(hash, life.age); hash_value(hash, life.lifespan); hash_value(hash, life.starvation); } }
   for (const BroodSnapshot& b : brood_) { hash_value(hash, b.id); hash_value(hash, static_cast<std::uint64_t>(b.stage)); hash_value(hash, static_cast<std::uint64_t>(b.role)); hash_value(hash, b.progress); hash_value(hash, b.starvation); hash_signed(hash, b.position.x); hash_signed(hash, b.position.y); hash_value(hash, b.carried_by); }
   for (const FoodPile& pile : granary_) { hash_signed(hash, pile.position.x); hash_signed(hash, pile.position.y); hash_value(hash, static_cast<std::uint64_t>(pile.nutrient)); hash_signed(hash, pile.amount); } for (const CorpseSnapshot& c : corpses_) { hash_value(hash, c.id); hash_value(hash, c.age); } for (const DroppedCargoSnapshot& dropped : dropped_food_) { hash_value(hash, dropped.id); hash_signed(hash, dropped.amount); hash_value(hash, dropped.age); }
   hash_signed(hash, stats_.delivered); hash_value(hash, stats_.cells_excavated); hash_value(hash, stats_.workers_born); hash_value(hash, stats_.deaths); hash_value(hash, stats_.productive_worker_ticks); hash_value(hash, stats_.gynes_born); for (const auto level : adaptation_levels_) hash_value(hash, level); hash_value(hash, traits_.vigor_tier); hash_value(hash, traits_.industry_tier); hash_value(hash, mature_); hash_value(hash, egg_assignment_counter_);
-  for (const DigFace& face : dig_plan_.faces()) { hash_value(hash, face.active); if (!face.active) continue; hash_signed(hash, face.anchor.x); hash_signed(hash, face.anchor.y); hash_signed(hash, face.heading.x); hash_signed(hash, face.heading.y); hash_value(hash, face.length); hash_value(hash, face.chamber); }
   return hash;
 }
 
 bool World::invariant_holds() const {
-  if (stores_.carbohydrate < 0 || stores_.protein < 0 || stores_.carbohydrate > stores_.carbohydrate_capacity || stores_.protein > stores_.protein_capacity) return false; std::array<std::int64_t, 2> reserved{}; EntityId previous = 0;
-  for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); if (id.id <= previous || !grid_.passable(p.cell()) || cargo.amount < 0) return false; previous = id.id; if (registry_.all_of<Forager>(e)) { const Forager& f = registry_.get<Forager>(e); if (f.reserved_amount < 0) return false; if (f.source_index >= 0) reserved[static_cast<std::size_t>(f.source_index)] += f.reserved_amount; } }
-  for (std::size_t i = 0; i < sources_.size(); ++i) if (sources_[i].amount < 0 || sources_[i].amount > sources_[i].capacity || sources_[i].reserved != reserved[i] || sources_[i].reserved > sources_[i].amount) return false;
+  if (stores_.carbohydrate < 0 || stores_.protein < 0 || stores_.carbohydrate > stores_.carbohydrate_capacity || stores_.protein > stores_.protein_capacity) return false;
+  std::vector<std::pair<EntityId, std::int64_t>> reserved;
+  reserved.reserve(sources_.size());
+  for (const FoodSource& source : sources_) reserved.emplace_back(source.id, 0);
+  EntityId previous = 0;
+  for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); if (id.id <= previous || !grid_.passable(p.cell()) || cargo.amount < 0) return false; previous = id.id; if (registry_.all_of<Forager>(e)) { const Forager& f = registry_.get<Forager>(e); if (f.reserved_amount < 0) return false; if (f.reserved_amount > 0) { const auto slot = std::find_if(reserved.begin(), reserved.end(), [&f](const auto& entry) { return entry.first == f.source_id; }); if (slot == reserved.end()) return false; slot->second += f.reserved_amount; } } }
+  if (sources_.size() > kMaxFoodSources) return false;
+  for (std::size_t i = 0; i < sources_.size(); ++i) if (sources_[i].amount < 0 || sources_[i].amount > sources_[i].capacity || sources_[i].reserved != reserved[i].second || sources_[i].reserved > sources_[i].amount) return false;
   // Stored food is the sum of the heaps in the nest: the counter can never hold grain no cell does.
   std::array<std::int64_t, 2> stored{};
   for (const FoodPile& pile : granary_) {
@@ -889,7 +1122,14 @@ bool World::invariant_holds() const {
 }
 
 void World::debug_set_source_amount(const std::size_t i, const std::int64_t amount) { FoodSource& source = sources_.at(i); if (amount < 0 || amount > source.capacity) throw std::out_of_range("source amount outside capacity"); source.amount = amount; }
-void World::debug_set_source_refill(const std::size_t i, const std::int64_t amount) { if (amount < 0) throw std::out_of_range("source refill cannot be negative"); sources_.at(i).refill_amount = amount; }
+EntityId World::debug_add_source(const GridPos position, const Nutrient nutrient, const std::int64_t amount) {
+  if (amount <= 0 || sources_.size() >= kMaxFoodSources || !grid_.walkable(position)) {
+    throw std::out_of_range("cannot place a food source there");
+  }
+  sources_.push_back({next_id_++, position, nutrient, amount, amount, 0, false, tick_});
+  stats_.external_refill += amount;
+  return sources_.back().id;
+}
 void World::debug_set_store(const Nutrient n, const std::int64_t amount) { if (amount < 0 || amount > capacity_for(n)) throw std::out_of_range("store amount outside capacity"); stock_granary(n, amount); }
 void World::debug_set_worker_lifespan(const EntityId id, const Tick lifespan) { for (const entt::entity e : ordered_entities_) if (registry_.get<Identity>(e).id == id && registry_.all_of<Life>(e)) registry_.get<Life>(e).lifespan = lifespan; }
 void World::debug_spawn_brood(const BroodStage stage, const Tick progress, const Tick starvation, const BroodRole role) { brood_.push_back({next_id_++, stage, home_, progress, brood_target(stage, role), 0, starvation, role}); }

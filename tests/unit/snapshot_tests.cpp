@@ -4,6 +4,8 @@
 #include "sim/snapshot.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <string>
 
@@ -326,7 +328,8 @@ TEST_CASE("a resumed run stays paused at its saved tick", "[persistence][snapsho
 namespace {
 
 // Rewrites a current profile document into the schema 1 shape M3 shipped, so the migration is
-// exercised against a real colony rather than a hand-written stub.
+// exercised against a real legacy document rather than a hand-written stub. Everything the newer
+// schemas added has to go, including the fields schema 3 introduced.
 json downgrade_to_schema_one(json document) {
   document["schema_version"] = 1;
   document.erase("last_flight_receipt");
@@ -336,6 +339,33 @@ json downgrade_to_schema_one(json document) {
   world.erase("egg_assignment_counter");
   world.at("stats").erase("gynes_born");
   for (json& item : world.at("brood")) item.erase("role");
+
+  // Schema 3 gave sites an end and rooms a purpose; schema 1 had neither.
+  world.erase("rooms");
+  world.erase("next_source_spawn");
+  world.erase("recruiting_source");
+  world.erase("recruit_until");
+  world.at("rng").erase("world_state");
+  world.at("rng").erase("world_increment");
+  std::vector<ant::sim::EntityId> source_ids;
+  for (json& source : world.at("sources")) {
+    source_ids.push_back(source.at("id").get<ant::sim::EntityId>());
+    source.erase("known");
+    source.erase("appeared");
+    source["refill_amount"] = 800;
+    source["refill_interval"] = 20;
+    source["next_refill"] = 20;
+  }
+  for (json& actor : world.at("actors")) {
+    if (!actor.at("worker").get<bool>()) continue;
+    json& forager = actor.at("forager");
+    const auto id = forager.at("source_id").get<ant::sim::EntityId>();
+    const auto slot = std::find(source_ids.begin(), source_ids.end(), id);
+    forager["source_index"] =
+        slot == source_ids.end() ? -1 : static_cast<int>(slot - source_ids.begin());
+    forager.erase("source_id");
+    forager.erase("scout_target");
+  }
   return document;
 }
 
@@ -366,10 +396,24 @@ TEST_CASE("a schema 1 profile migrates forward and keeps its colony",
   CHECK(world.stats.gynes_born == 0);
   for (const auto& item : world.brood) CHECK(item.role == ant::sim::BroodRole::Worker);
 
-  // The migrated colony is still the same colony.
+  // Schema 3 fields the old document never had are filled in rather than guessed at: the sites the
+  // colony had are the ones it knows, and it is given the founding rooms, opened where the ground
+  // it already dug has the space for them.
+  CHECK_FALSE(world.sources.empty());
+  for (const auto& source : world.sources) CHECK(source.known);
+  REQUIRE(world.rooms.size() == 2);
+  CHECK(world.rooms[0].kind == ant::sim::RoomKind::Nursery);
+  CHECK(world.rooms[1].kind == ant::sim::RoomKind::Granary);
+  for (const auto& room : world.rooms) CHECK(room.complete);
+
+  // The migrated colony is still the same colony: same moment, same ground, same ants, same food.
   const ant::game::Session restored = ant::game::Session::restore(*decoded.profile->run);
-  CHECK(restored.world().canonical_hash() == session.world().canonical_hash());
   CHECK(restored.world().tick() == session.world().tick());
+  CHECK(restored.world().grid().material_hash() == session.world().grid().material_hash());
+  CHECK(restored.world().living_workers() == session.world().living_workers());
+  CHECK(restored.world().brood().size() == session.world().brood().size());
+  CHECK(restored.world().stores().carbohydrate == session.world().stores().carbohydrate);
+  CHECK(restored.world().stores().protein == session.world().stores().protein);
   CHECK(restored.world().invariant_holds());
 }
 

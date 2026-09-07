@@ -37,7 +37,7 @@ Initial world: 384x216 cells, 32x32 chunks, top 32 rows surface/sky. Four-neighb
 
 The founding nest is a royal chamber around the queen, two store chambers twenty cells to either side, the corridors joining them and an entrance shaft. Roots run down from the turf and scattered stone lenses sit through the deep ground, both generated before the nest is carved so neither can block it.
 
-Air cells have semantic regions derived from the connected nest each time topology changes: cells within Manhattan distance `kNurseryRadius` of home are **nursery**, and cells beyond it with at least sixteen open cells in their five-by-five neighbourhood are **store cells**. A three-wide corridor can never reach sixteen, so passages stay clear and only real chambers hold food. Reachable nest air and the nursery cell count together determine nursery capacity. All ants share navigable cells without collision solving. Avoid overlap visually with deterministic small offsets; these never change physical passability.
+Air cells belong to a **room** or to nothing. A room is a disc the colony decided to dig — a brood room or a granary — and only its cells hold anything: brood lies in brood rooms, grain in granaries, and a corridor stays a corridor. Room membership is recomputed from the room list and the connected nest whenever either changes. All ants share navigable cells without collision solving. Avoid overlap visually with deterministic small offsets; these never change physical passability.
 
 Movement is integer subcell distance per tick with residual carry so fractions are not lost. Worker speed starts at 6 cells/sec. An arrival cannot overshoot a solid tile. Paths comprise cell centers; sim position is authoritative and render interpolation is cosmetic.
 
@@ -83,15 +83,35 @@ No nest/food omniscience via pheromones; no smart deletion of failed trails. Sta
 
 ## Excavation
 
-Queen/nursery anchor and colony space demand determine whether excavation work is useful. Excavation is planned as at most four **persistent dig faces**, not a ranked heap of loose cells. A face is an anchor in connected nest air, a cardinal heading, the branch length driven so far, and whether it is widening a chamber. It plans the corridor cross-section one step along its heading — three cells wide, measured across the heading — and only cells that are diggable and inside the envelope, so a root or the envelope edge narrows a corridor rather than stalling it.
+The colony digs for a reason. Every excavation belongs to one **room** it has decided it needs and
+to the corridor that reaches it, so a finished nest is chambers joined by passages rather than
+wandering lines. A room is a centre, a radius, a kind (brood or granary), and whether it is
+finished. Rooms are the whole reason the colony excavates, so they are serialized with the run and
+contribute to the canonical hash.
 
-A face advances only once its centreline cell is genuinely open, then keeps its heading for four cells before seeded noise may turn it a quarter turn, which produces bends and cardinal stair steps rather than scattered pits. It never turns toward the surface. A face branches into a free slot once it has driven `kMinBranchLength` cells, taking a perpendicular heading, and retires at `kMaxBranchLength` or after `kBlockedLimit` ticks without progress; an idle slot reseeds from connected air that touches diggable ground, preferring starts far from home and from the other faces. When the colony is short of space a branch end becomes a chamber and widens into a rounded blob instead of driving on. At most two workers commit to a face, and they take different cells of the cross-section so they widen it together.
+Demand is checked once a simulated second. Half full is a reason to plan: brood at half the cradles
+or a store at half its capacity. Three quarters full is a reason to hurry, which is the only
+difference the excavation stimulus sees — a founding colony should be out finding food, not all
+underground. When the colony wants space it first **widens** the nearest room of that kind by one
+cell of radius, up to `kRoomMaxRadius`; only when that room is capped, crowded or would leave the
+envelope does it **site a new one**. Sites are searched ring by ring outward from home along nine
+downward or sideways bearings, taking the nearest ring that works, so the nest grows outward
+gradually and corridors stay short. A site is rejected if it would leave the envelope, overlap
+another room, or be more than a fifth unmineable rock. Brood rooms additionally stay within
+`kNurseryReach` of the queen, because a nurse has to walk there.
 
-The excavation envelope is `y > 34` and Manhattan distance from home under 96, which reaches the clay layer; the previous radius of 64 did not. Seeded tie-breaking prevents perfect symmetry. Faces steer future digging, so they are serialized with the run rather than rederived, and they contribute to the canonical hash.
+One project runs at a time. Its work list is the corridor from the nest outward — found by walking
+back toward home and stopping at the first open cell, then widened to `kCorridorWidth` across its
+run — followed by the room's own cells, ordered outward from the centre. Only an **exposed** face
+can be claimed: a diggable cell with somewhere to stand beside it. That is what makes the corridor
+arrive before the chamber opens, with no ordering machinery of its own. At most
+`kDiggersPerProject` workers cut at once, retallied once per tick as a headcount rather than
+rescanned per excavator. A room is finished when nothing inside it is diggable any more, so a rock
+the colony cannot cut simply stays and the room is finished around it.
 
-Each cell has remaining dig work (soil 10, clay 25, root 40 units); stone and bedrock have none and are never planned. Base worker delivers 2 work units/sec. On final hit, clear cell, bump topology/chunk revisions, and put one spoil unit in the final digger's cargo. It must deliver to surface before digging again. Other diggers release that cell and retarget. Spoil is tipped onto a bounded surface apron; once that apron is full the grain is recorded as **overflow** tipped out of view, so `spoil_delivered == mound + overflow` always holds and a full apron never traps the excavator carrying the grain.
-
-Nursery capacity is `max(12, min(floor(reachable_nest_air / 4), nursery cells))`, so brood can never outnumber the cradles that exist. Initial connected nest area is at least 64 cells (capacity >=16). Capacity limits all live brood together, not adult workers. If capacity drops in a debug edit, existing brood survive but laying pauses.
+Taking a face commits a worker for `5 + distance/6` seconds of task choice. A room at the far end
+of the nest is a ten second walk, and a worker who reconsidered every five seconds turned back
+before ever arriving.
 
 Full structural stability/collapse is out of scope. Do not implement the archive's anchored-solid flood fill as a physical support solver: connected soil can still be mechanically unsupported, and chunk-only analysis can miss remote supports.
 
@@ -202,3 +222,36 @@ what she was holding.
 
 Taking a dig face commits the worker for twelve seconds of task choice. A chamber can be a long walk
 from the queen, and a worker that reconsidered every five seconds turned back before it ever arrived.
+
+## Food is finite, and has to be found (T014f)
+
+Forage sites are not restocked. Each has an amount and a size, and when the last grain is carried
+away it is gone. New sites appear on the surface every 30 to 70 seconds, up to `kMaxFoodSources` at
+once, resting on whatever the ground level is in that column so they sit on the turf or on the
+colony's own spoil. The surface keeps roughly twice as many sugar sites as protein ones, matching
+the ratio a colony eats them in: protein sites are barely touched and would otherwise hold every
+slot while the colony starved for sugar. Spoil is never tipped into a column a site stands in —
+burying the colony's own food strands it behind soil it can no longer reach — and a site nothing
+can path to any more is written off as decayed rather than retried for ever.
+
+A site starts **unknown**. Until a scout has passed within `kDiscoveryReach` of it, the colony
+cannot forage there. A worker goes scouting when the colony is short of a food it has nowhere known
+to collect: a larder full of protein is no help to a colony out of sugar. At most
+`max(2, workers / 12)` search at once, so a few go looking and the rest fetch whatever is still
+worth fetching, or wait. Scouts leave by the entrance and then sweep the surface in short hops,
+which keeps every leg a short walk and covers the ground in between.
+
+Finding a site alerts the whole colony at once: it becomes known, a strong trail marks it, and for
+`kRecruitmentTicks` every forager choosing where to go next is steered onto it ahead of every other
+consideration. After the alert, choice returns to the nutrient the colony is short of, with trail
+strength breaking ties. A site nobody found rots after `kSourceLifetime`, recorded as decayed food,
+so an unreachable corner of the surface cannot silently hold every site the world has to offer.
+
+Store capacity is the room the colony has dug: two thirds of its granary cells are allotted to
+carbohydrate and the rest to protein, and the colony forages to **fill** what it has rather than to
+reach a fraction of it. A forager holds its assigned heap for the whole delivery, and an empty cell
+only counts as a destination while the nutrient still has cells to spare — otherwise the last free
+cells could be promised to more ants than the chambers can hold.
+
+The queen lays where she stands. A nurse carries each egg to a free cradle in a brood room, and
+fetches back anything she finds lying outside one.

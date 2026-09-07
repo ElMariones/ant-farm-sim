@@ -10,6 +10,7 @@ namespace {
 
 // Carves a filled ellipse of open air. Chambers are described by their centre and semi-axes so the
 // starting nest reads as rooms joined by passages rather than one scooped-out cavity.
+// Carves a filled ellipse of open air, for the royal chamber the founding queen sits in.
 void carve_ellipse(Grid& grid, const GridPos centre, const double half_width,
                    const double half_height) {
   const int reach_x = static_cast<int>(half_width) + 1;
@@ -24,11 +25,31 @@ void carve_ellipse(Grid& grid, const GridPos centre, const double half_width,
   }
 }
 
-void carve_corridor(Grid& grid, const int from_x, const int to_x, const int top_y,
-                    const int bottom_y) {
-  for (int y = top_y; y <= bottom_y; ++y) {
-    for (int x = std::min(from_x, to_x); x <= std::max(from_x, to_x); ++x) {
-      if (grid.in_bounds({x, y})) grid.set({x, y}, Material::Air);
+void carve_room(Grid& grid, const Room& room) {
+  const int reach = room.radius;
+  for (int dy = -reach; dy <= reach; ++dy) {
+    for (int dx = -reach; dx <= reach; ++dx) {
+      const GridPos cell{room.centre.x + dx, room.centre.y + dy};
+      if (grid.in_bounds(cell) && room.contains(cell)) grid.set(cell, Material::Air);
+    }
+  }
+}
+
+// The same larger-axis-first staircase the colony digs later, so the founding corridors and the
+// ones the ants cut themselves are the same shape.
+void carve_passage(Grid& grid, const GridPos from, const GridPos to) {
+  GridPos cursor = from;
+  for (int guard = 0; cursor != to && guard < 400; ++guard) {
+    const int dx = to.x - cursor.x;
+    const int dy = to.y - cursor.y;
+    GridPos heading{0, 0};
+    if (std::abs(dx) >= std::abs(dy)) heading.x = dx > 0 ? 1 : -1;
+    else heading.y = dy > 0 ? 1 : -1;
+    cursor = {cursor.x + heading.x, cursor.y + heading.y};
+    const GridPos side{-heading.y, heading.x};
+    for (int offset = -1; offset <= 1; ++offset) {
+      const GridPos cell{cursor.x + side.x * offset, cursor.y + side.y * offset};
+      if (grid.in_bounds(cell)) grid.set(cell, Material::Air);
     }
   }
 }
@@ -95,28 +116,30 @@ GeneratedTerrain generate_terrain(const std::uint64_t seed) {
     }
   }
 
-  // The founding nest: an entrance shaft, a royal chamber around the queen, and two store chambers
-  // out to either side. Carved last, so nothing generated above can block it.
+  // The founding nest: an entrance shaft down to the royal chamber, a brood room below the queen
+  // and a granary to either side, joined by corridors. Carved last, so nothing generated above can
+  // block it.
   for (int y = 31; y <= 54; ++y) {
     const int half_width = y < 46 ? 1 : 2;
     for (int x = generated.entrance.x - half_width; x <= generated.entrance.x + half_width; ++x) {
       grid.set({x, y}, Material::Air);
     }
   }
-  carve_ellipse(grid, generated.home, 7.0, 4.5);
-  const GridPos left_store{generated.home.x - 20, 60};
-  const GridPos right_store{generated.home.x + 20, 60};
-  carve_ellipse(grid, left_store, 7.0, 4.5);
-  carve_ellipse(grid, right_store, 7.0, 4.5);
-  carve_corridor(grid, left_store.x + 6, generated.home.x - 6, 59, 61);
-  carve_corridor(grid, generated.home.x + 6, right_store.x - 6, 59, 61);
+  carve_ellipse(grid, generated.home, 6.0, 4.0);
+  generated.rooms = {
+      {{generated.home.x, generated.home.y + 16}, kRoomStartRadius, RoomKind::Nursery, true},
+      {{generated.home.x - 18, generated.home.y + 10}, kRoomStartRadius, RoomKind::Granary, true}};
+  for (const Room& room : generated.rooms) {
+    carve_passage(grid, generated.home, room.centre);
+    carve_room(grid, room);
+  }
 
   // Two forage sites on the surface: one within a short trip of the entrance and one a long trek
   // away, on opposite sides, so the colony has a near staple and a distant prize.
   const std::uint64_t placement = mix_seed(seed ^ 0xF00DULL);
   const int near_side = (placement & 1ULL) == 0ULL ? -1 : 1;
-  const int near_offset = 60 + static_cast<int>((placement >> 8U) % 33ULL);
-  const int far_offset = 108 + static_cast<int>((placement >> 24U) % 39ULL);
+  const int near_offset = 48 + static_cast<int>((placement >> 8U) % 29ULL);
+  const int far_offset = 88 + static_cast<int>((placement >> 24U) % 35ULL);
   const int carbohydrate_x =
       std::clamp(generated.entrance.x + near_side * near_offset, 8, Grid::kWidth - 9);
   const int protein_x =

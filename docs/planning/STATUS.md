@@ -8,7 +8,37 @@ Updated: 2026-09-07.
 
 M4 completes the generation loop. A colony latches **maturity** at 100 living workers, 150 worker births and 12 simulated minutes; after that one egg in five becomes a **winged queen**, capped at ten live and developing combined. With three winged queens, a living founding queen and an unassisted run, the player can send a **nuptial flight**, which pays Genetic Legacy through a single committed profile revision carrying an immutable receipt. Between colonies, Legacy buys eight permanent trait tiers across Vigor and Industry, and founding the next colony applies the owned traits exactly once.
 
-## Latest session — T014e and T006b
+## Latest session — T014f
+
+**The colony digs for a reason, and food runs out.** Excavation is no longer wandering faces: every
+cell cut belongs to a room the colony decided it needed — a brood room or a granary — and to the
+corridor that reached it. Half full is a reason to widen the nearest room of that kind by a cell of
+radius; when it can be widened no further the colony sites another one a ring further out. One
+project runs at a time, and only an exposed face can be claimed, which is what makes the corridor
+arrive before the chamber opens. Forage sites are finite: a site is spent when it is carried away,
+new ones appear along the surface, and the colony does not know they are there until a scout walks
+within six cells of one. Finding a site alerts the whole colony and steers every forager onto it for
+ninety seconds. The queen lays where she stands and a nurse carries each egg to a free cradle.
+
+Verified on this machine (Apple Silicon macOS, Apple Clang 21):
+
+- `./build/dev/ant_tests`: **pass, 40,525 assertions in 136 test cases**, including the sixty-minute
+  soak. New cases cover room siting and the nursery reach, corridor-before-chamber dig order, the
+  exposed-face claim and its crew cap, widening before siting, finishing a room around rock, a
+  colony's rooms never overlapping, and a colony scouting out and discovering a planted site.
+- `ant_headless --verify-round-trip` at 20,000 ticks passes on seeds 42, 7, 101 and 2026.
+- Sixty simulated minutes on five seeds: 139-150 workers, 262-270 births, 125-129 deaths, no
+  extinctions.
+- Three seeds against both scenario policies: flight at 33.4-33.9 minutes buying and 40.2-43.3 not,
+  first purchase at 160-176 s, all inside the ECONOMY targets. See the balance report, which also
+  records the two real faults measuring turned up: spoil burying the colony's own food, and a
+  promised store cell being over-promised.
+
+**Not verified:** the machine's display was locked for the whole of this session's visual work, so
+no native capture of the new rooms, the faint undiscovered site or the recruitment pulse was taken.
+The renderer changes are code-reviewed only.
+
+## Earlier session — T014e and T006b
 
 **The nest is a place, not a set of counters.** Roots are mineable at four times the cost of soil,
 scattered stone lenses through the deep ground can never be removed, the founding nest is a royal

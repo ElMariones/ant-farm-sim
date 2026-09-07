@@ -10,14 +10,34 @@ GameView make_view(const Session& session) {
   else if (!world.brood().empty() && world.task_diagnostics().stimuli[2] >= 500) bottleneck = Bottleneck::Nursing;
   else if (world.brood().empty() && world.queen_alive()) bottleneck = Bottleneck::QueenOutput;
   else if (world.task_diagnostics().workers_by_task[4] > world.actors().size() / 2) bottleneck = Bottleneck::Labor;
-  GameView view{world.seed(),          world.tick(),          sim::Grid::kWidth,
-          sim::Grid::kHeight,    world.grid().cells(),  world.home(),
-          world.sources(),       world.stores(),        world.stats(),
-          world.actors(),        world.brood(),         world.corpses(),
-          world.dropped_food(),  world.granary(),       world.trails().cells(),
-          world.task_diagnostics(), world.nursery_capacity(),
-          world.connected_nest_air(), world.spoil_mound(), world.queen_alive(),
-          world.decline(),       world.extinct(), world.focus(), session.focus_available()};
+  GameView view;
+  view.seed = world.seed();
+  view.tick = world.tick();
+  view.grid_width = sim::Grid::kWidth;
+  view.grid_height = sim::Grid::kHeight;
+  view.terrain = world.grid().cells();
+  view.home = world.home();
+  view.sources = world.sources();
+  view.rooms = world.rooms();
+  view.recruiting_source = world.recruiting_source();
+  view.knows_any_food = world.knows_any_food();
+  view.stores = world.stores();
+  view.stats = world.stats();
+  view.actors = world.actors();
+  view.brood = world.brood();
+  view.corpses = world.corpses();
+  view.dropped_food = world.dropped_food();
+  view.granary = world.granary();
+  view.trails = world.trails().cells();
+  view.tasks = world.task_diagnostics();
+  view.nursery_capacity = world.nursery_capacity();
+  view.connected_nest_air = world.connected_nest_air();
+  view.spoil_mound = world.spoil_mound();
+  view.queen_alive = world.queen_alive();
+  view.decline = world.decline();
+  view.extinct = world.extinct();
+  view.focus = world.focus();
+  view.focus_available = session.focus_available();
   view.focus_cooldown_remaining = session.focus_cooldown_remaining();
   view.work = session.work();
   view.productive_tick_remainder = session.productive_tick_remainder();

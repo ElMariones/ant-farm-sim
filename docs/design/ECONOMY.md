@@ -13,9 +13,9 @@ Seconds below are simulated seconds at 1x. Food uses signed 64-bit milli-units i
 | Parameter | Starting value |
 |---|---|
 | Population | Queen + 6 workers; 0 brood; 0 winged queens |
-| Stores / capacity per food | Carbs 60 / ~209; protein 30 / ~104, both set by the store cells dug |
-| Food sources | One carbohydrate and one protein source; each capacity 100 |
-| Source refill | 0.8 carbs/sec and 0.4 protein/sec, capped at source capacity |
+| Stores / capacity per food | Carbs 60 / ~99; protein 30 / ~50 at founding, both set by the granary cells dug |
+| Food sources | Finite. Two known at founding, 140 each; new ones appear every 30-70 s, 60-160 each, up to eight at once |
+| Source supply | None. A site is spent when it is carried away; the surface keeps about two sugar sites per protein one |
 | Carry capacity | 2 units of one food per worker |
 | Worker movement | 6 cells/sec |
 | Worker metabolism | 0.003 carbs/sec |
@@ -28,8 +28,8 @@ Seconds below are simulated seconds at 1x. Food uses signed 64-bit milli-units i
 | Winged-queen development | 2x each worker stage duration |
 | Starvation grace | Worker 120 sec; queen 300 sec; larva 180 sec; winged queen 120 sec |
 | Initial Work / Legacy | 0 / existing profile wallet (0 on new profile) |
-| Nursery capacity | max(12, min(floor(reachable nest air / 4), nursery cells)) |
-| Food stimulus targets | Carbs 50%, protein 50% of current store capacities |
+| Nursery capacity | max(12, connected brood-room cells) |
+| Food stimulus targets | A full larder: 100% of current store capacities |
 
 Consumption occurs each second with fixed-point remainder retained for fractional rates. When a due per-entity ration is unavailable, do not consume a partial ration; increment continuous shortage duration and apply any relevant development stall. A complete ration resets that entity's continuous starvation timer. The HUD should distinguish available food from whether larvae are receiving it.
 
@@ -64,7 +64,7 @@ At most one productive tick per worker per simulation tick. Maintain `productive
 
 These upgrades change rates/capacity, not task eligibility. Existing progress is stored in normalized fixed-point development/work units; a duration reduction changes future speed without resetting or instantly replaying completed births. A carrying-capacity reduction is impossible during a run under normal controls; load validation preserves already carried quantities rather than deleting excess.
 
-Run upgrades are bought with Work and reset to zero on a new run. Neither food nor Work converts to Legacy directly. Food storage capacity is the room the colony has physically dug: each **store cell** — connected nest air beyond the nursery ring with at least sixteen open cells in its five-by-five neighbourhood — holds 1.8 units, two thirds of them allotted to carbohydrate and the rest to protein. The founding three-chamber nest opens with roughly 209 carbohydrate and 104 protein, matching the previous fixed 200/100, and capacity grows only when a new chamber is excavated. Store cells only ever accumulate, so capacity is monotonic and can never invalidate stored food.
+Run upgrades are bought with Work and reset to zero on a new run. Neither food nor Work converts to Legacy directly. Food storage capacity is the room the colony has physically dug: each cell of a **granary room** holds 1.8 units, two thirds of the cells allotted to carbohydrate and the rest to protein. A founding nest opens with one granary, roughly 99 carbohydrate and 50 protein, and capacity grows only when the colony widens that room or digs another. Granary cells only ever accumulate, so capacity is monotonic and can never invalidate stored food.
 
 ## Maturity and prestige payout
 

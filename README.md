@@ -35,7 +35,11 @@ ctest --preset dev
 ./build/dev/ant_farm --seed 42
 ```
 
-The colony is drawn as a real cross-section. Roots run down from the turf and can be mined, slowly — four times the cost of soil — while scattered stone lenses through the deep ground can never be removed and passages have to bend around them. The founding nest is a royal chamber, two store chambers and the corridors between them, and every grain the colony owns is a visible heap on a real cell: foragers carry loads to a chamber and set them down, nurses carry eggs back to the nursery ring, and store capacity is exactly the room the colony has dug.
+The colony is drawn as a real cross-section. Roots run down from the turf and can be mined, slowly — four times the cost of soil — while scattered stone lenses through the deep ground can never be removed and passages have to bend around them.
+
+The colony digs for a reason. Every excavation is a **room** it decided it needed — a brood room or a granary — and the corridor that reached it, so the nest is chambers joined by passages rather than wandering lines. When a room is half full the colony widens it by a cell of radius; when it can be widened no further, it sites another one further out. Every grain the colony owns is a visible heap on a real cell in a granary, the queen lays where she stands and a nurse carries each egg to a free cradle in a brood room, and store capacity is exactly the room the colony has dug.
+
+Food runs out. A forage site is a fallen berry or a dead beetle with a finite amount in it, and when the last grain is carried away it is gone. New ones appear along the surface, and the colony does not know they are there: an undiscovered site is drawn as a faint outline until a scout walks past it. When the colony is short of something it has nowhere left to collect, a few workers go searching while the rest fetch what is still worth fetching or wait — and the moment one finds a site, the whole colony is alerted and steered onto it.
 
 The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/5×/20× speed. Its calm paper-and-diorama interface uses a high-resolution bundled Nunito atlas with DPI-aware rendering for crisp Retina text. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
 

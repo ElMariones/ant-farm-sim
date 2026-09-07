@@ -67,7 +67,7 @@ private:
   void draw_pause_menu();
   void draw_recovery_prompt();
   void draw_legacy_panel(const game::GameView& view);
-  void draw_food_source(const sim::FoodSource& source) const;
+  void draw_food_source(const sim::FoodSource& source, bool recruiting) const;
   void draw_granary(const game::GameView& view) const;
   // A modal card with a title, a rule under it and a shadow, shared by every overlay.
   [[nodiscard]] Rectangle draw_modal_card(float width, float height, const char* title) const;

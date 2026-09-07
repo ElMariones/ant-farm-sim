@@ -37,15 +37,19 @@ TEST_CASE("fixed-tick simulation is deterministic regardless of batching", "[wor
 TEST_CASE("workers remain on passable cells and complete physical food round trips",
           "[world][forage]") {
   ant::sim::World world(7);
-  constexpr std::int64_t initial_mass = 290'000;
+  // Two founding sites of 140,000 plus the founding stock the queen brought with her.
+  constexpr std::int64_t initial_mass = 370'000;
   world.run_ticks(2'400);
 
   REQUIRE(world.stats().completed_round_trips > 0);
   CHECK(world.stats().picked_up == world.stats().delivered + cargo_total(world));
-  const std::int64_t source_mass = world.sources()[0].amount + world.sources()[1].amount;
+  std::int64_t source_mass = 0;
+  for (const auto& source : world.sources()) source_mass += source.amount;
   const std::int64_t store_mass = world.stores().carbohydrate + world.stores().protein;
+  // Food a site never gave up because nobody found it before it rotted is a recorded sink, like
+  // anything the colony ate.
   CHECK(source_mass + store_mass + cargo_total(world) + world.stats().consumed_carbohydrate +
-            world.stats().consumed_protein ==
+            world.stats().consumed_protein + world.stats().decayed_food ==
         initial_mass + world.stats().external_refill);
   CHECK(world.invariant_holds());
 }
@@ -78,7 +82,16 @@ TEST_CASE("unreachable targets release reservations", "[world][forage][navigatio
 
 TEST_CASE("topology changes invalidate active paths before movement", "[world][navigation]") {
   ant::sim::World world(42);
-  for (int tick = 0; tick < 100 && world.stats().path_requests == 0; ++tick) world.step();
+  // Wait for a forager to actually be walking a planned route, which is what a topology change
+  // has to invalidate.
+  const auto en_route = [&world] {
+    const auto actors = world.actors();
+    return std::any_of(actors.begin(), actors.end(), [](const ant::sim::ActorSnapshot& actor) {
+      return actor.forage_state == ant::sim::ForageState::ToSource;
+    });
+  };
+  for (int tick = 0; tick < 6'000 && !en_route(); ++tick) world.step();
+  REQUIRE(en_route());
   const auto requests_before = world.stats().path_requests;
   world.debug_grid().set({world.home().x, 40}, ant::sim::Material::Soil);
   world.step();
@@ -91,7 +104,7 @@ TEST_CASE("topology changes invalidate active paths before movement", "[world][n
 TEST_CASE("cargo is retained when storage fills before delivery", "[world][forage]") {
   ant::sim::World world(101);
   bool carrying = false;
-  for (int tick = 0; tick < 1'200 && !carrying; ++tick) {
+  for (int tick = 0; tick < 4'000 && !carrying; ++tick) {
     world.step();
     for (const auto& actor : world.actors()) {
       carrying = carrying || (actor.cargo_kind == ant::sim::CargoKind::Food && actor.cargo_amount > 0);
@@ -152,8 +165,6 @@ TEST_CASE("larval shortage stalls development then respects starvation grace", "
   ant::sim::World world(3);
   world.debug_set_source_amount(0, 0);
   world.debug_set_source_amount(1, 0);
-  world.debug_set_source_refill(0, 0);
-  world.debug_set_source_refill(1, 0);
   world.debug_set_store(ant::sim::Nutrient::Carbohydrate, 0);
   world.debug_set_store(ant::sim::Nutrient::Protein, 0);
   world.debug_spawn_brood(ant::sim::BroodStage::Larva, 400,
@@ -210,20 +221,6 @@ TEST_CASE("stored food is exactly the heaps lying in the nest", "[world][granary
   CHECK(world.invariant_holds());
 }
 
-TEST_CASE("brood is kept in the ring around the queen", "[world][brood]") {
-  ant::sim::World world(23);
-  world.run_ticks(4'000);
-  REQUIRE_FALSE(world.brood().empty());
-  for (const ant::sim::BroodSnapshot& item : world.brood()) {
-    CAPTURE(item.position.x, item.position.y);
-    const int reach = std::abs(item.position.x - world.home().x) +
-                      std::abs(item.position.y - world.home().y);
-    // Either lying in the nursery, or in transit in a nurse's mandibles.
-    CHECK((reach <= ant::sim::kNurseryRadius || item.carried_by != 0));
-    CHECK(world.grid().passable(item.position));
-  }
-}
-
 TEST_CASE("roots are mined slowly and stone is never mined at all", "[world][dig]") {
   const auto count = [](const ant::sim::Grid& grid, const ant::sim::Material material) {
     return std::count(grid.cells().begin(), grid.cells().end(), material);
@@ -239,5 +236,66 @@ TEST_CASE("roots are mined slowly and stone is never mined at all", "[world][dig
   // Root costs four times what soil does, so a colony that has dug hundreds of cells has still
   // only chewed through a handful of them.
   CHECK(count(world.grid(), ant::sim::Material::Root) <= count(before, ant::sim::Material::Root));
+  CHECK(world.invariant_holds());
+}
+
+TEST_CASE("a forage site is finite and the colony scouts for the next one", "[world][forage]") {
+  ant::sim::World world(5);
+  // Empty the known sites and put an undiscovered one on the surface well away from the entrance.
+  world.debug_set_source_amount(0, 0);
+  world.debug_set_source_amount(1, 0);
+  const ant::sim::GridPos hidden{world.home().x - 70, 31};
+  const ant::sim::EntityId planted =
+      world.debug_add_source(hidden, ant::sim::Nutrient::Carbohydrate, 80'000);
+  // Short of sugar, but not so short that the colony starves before anyone can look.
+  world.debug_set_store(ant::sim::Nutrient::Carbohydrate,
+                        world.stores().carbohydrate_capacity / 4);
+  CHECK(world.wants_scouts());
+
+  bool scouted = false;
+  for (int tick = 0; tick < 400 && !scouted; ++tick) {
+    world.run_ticks(1);
+    for (const auto& actor : world.actors()) {
+      scouted = scouted || actor.forage_state == ant::sim::ForageState::Scouting;
+    }
+  }
+  CHECK(scouted);
+
+  const auto known = [&] {
+    const auto found = std::find_if(world.sources().begin(), world.sources().end(),
+        [planted](const ant::sim::FoodSource& s) { return s.id == planted; });
+    return found != world.sources().end() && found->known;
+  };
+  for (int tick = 0; tick < 6'000 && !known(); ++tick) world.run_ticks(1);
+  REQUIRE(known());
+  // Finding it alerts the colony: the site is the one everybody is being sent to.
+  CHECK(world.recruiting_source() == planted);
+  CHECK(world.stats().sources_found >= 1);
+
+  // And the spent sites are gone rather than lingering at zero.
+  CHECK(world.stats().sources_exhausted >= 2);
+  CHECK(world.invariant_holds());
+}
+
+TEST_CASE("brood and grain live in the rooms dug for them", "[world][rooms]") {
+  ant::sim::World world(13);
+  world.run_ticks(8'000);
+
+  const auto owns = [&](const ant::sim::GridPos cell, const ant::sim::RoomKind kind) {
+    return std::any_of(world.rooms().begin(), world.rooms().end(),
+                       [&](const ant::sim::Room& room) {
+                         return room.kind == kind && room.contains(cell);
+                       });
+  };
+  for (const ant::sim::FoodPile& pile : world.granary()) {
+    CAPTURE(pile.position.x, pile.position.y);
+    CHECK(owns(pile.position, ant::sim::RoomKind::Granary));
+  }
+  for (const ant::sim::BroodSnapshot& item : world.brood()) {
+    CAPTURE(item.position.x, item.position.y);
+    // Lying in a brood room, still beside the queen who laid it, or in a nurse's mandibles.
+    CHECK((owns(item.position, ant::sim::RoomKind::Nursery) || item.carried_by != 0 ||
+           item.position == world.home()));
+  }
   CHECK(world.invariant_holds());
 }

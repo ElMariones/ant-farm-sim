@@ -32,7 +32,11 @@ struct GameView {
   int grid_height{};
   std::vector<sim::Material> terrain;
   sim::GridPos home{};
-  std::array<sim::FoodSource, 2> sources{};
+  std::vector<sim::FoodSource> sources;
+  std::vector<sim::Room> rooms;
+  // The site the colony is currently calling everyone to, while the alert lasts.
+  sim::EntityId recruiting_source{};
+  bool knows_any_food{};
   sim::FoodStore stores{};
   sim::WorldStats stats{};
   std::vector<sim::ActorSnapshot> actors;

@@ -10,7 +10,10 @@ namespace {
 using ant::sim::AntKind;
 using ant::sim::BroodRole;
 using ant::sim::BroodStage;
+using ant::sim::Nutrient;
+using ant::sim::TraitModifiers;
 using ant::sim::World;
+using ant::sim::kTicksPerSecond;
 
 constexpr ant::sim::Tick kSecond = ant::sim::kTicksPerSecond;
 constexpr ant::sim::Tick kMaturityAge = 720 * kSecond;
@@ -256,11 +259,18 @@ TEST_CASE("permanent traits change founding parameters exactly once", "[world][t
     CHECK(vigorous.brood()[0].target == 1'530);  // 765 * 2
   }
   SECTION("Industry I raises the dig rate") {
-    World plain(42, {0, 0});
-    World industrious(42, {0, 1});
-    plain.run_ticks(6'000);
-    industrious.run_ticks(6'000);
-    CHECK(industrious.stats().cells_excavated >= plain.stats().cells_excavated);
+    // A colony only digs the rooms it needs, so hold both larders full — a standing reason to make
+    // more room — and the trait's effect on the rate is what separates them.
+    const auto cells_dug = [](const TraitModifiers traits) {
+      World world(42, traits);
+      for (int second = 0; second < 300; ++second) {
+        world.debug_set_store(Nutrient::Carbohydrate, world.stores().carbohydrate_capacity);
+        world.debug_set_store(Nutrient::Protein, world.stores().protein_capacity);
+        world.run_ticks(kTicksPerSecond);
+      }
+      return world.stats().cells_excavated;
+    };
+    CHECK(cells_dug({0, 1}) > cells_dug({0, 0}));
   }
   SECTION("traits are carried through a save and are not reapplied") {
     ant::game::Session session(42, ant::game::canonical_progression(), {3, 2});

@@ -165,3 +165,45 @@ One balance change was needed and is recorded here rather than tuned away. Takin
 commits a worker for `5 + distance/6` seconds instead of a flat five. A store chamber can be a ten
 second walk from the queen; with the old flat commitment a worker reconsidered and turned back
 before it ever arrived, and excavation over twenty thousand ticks fell from 117 cells to 17.
+
+## T014f re-check — rooms on demand and food that runs out
+
+Measured 2026-09-07 after excavation became room-building and forage sites became finite,
+discoverable and self-renewing. Release build, Apple Silicon macOS, three seeds against both
+policies:
+
+| Seed | Policy | Flight (s) | Maturity (s) | First buy (s) | Peak | Deaths | Cells dug |
+|---|---|---|---|---|---|---|---|
+| 1 | buy | 2034 | 1725 | 163 | 175 | 16 | 450 |
+| 1 | none | 2573 | 2107 | — | 147 | 42 | 379 |
+| 42 | buy | 2035 | 1722 | 160 | 180 | 11 | 388 |
+| 42 | none | 2600 | 2139 | — | 146 | 46 | 355 |
+| 101 | buy | 2003 | 1700 | 176 | 175 | 15 | 399 |
+| 101 | none | 2414 | 1946 | — | 148 | 45 | 380 |
+
+Every run lands inside ECONOMY's 30-45 minute first-prestige target — 33.4-33.9 minutes buying and
+40.2-43.3 not — and inside the 2-4 minute first-investment target. Peak population and deaths are
+unchanged. No run declines or goes extinct. The dominant bottleneck is still "Brood needs nursing".
+
+Excavation is lower and means something different: 355-450 cells of rooms and the corridors that
+reached them, against 664-1,049 cells of corridor driven for its own sake. Sixty simulated minutes
+across five seeds gives 139-150 workers, 262-270 births and 125-129 deaths, against 143 workers and
+278 births before the change.
+
+### Supply, and two failures found by measuring it
+
+Finite food needed the supply tuned against what the colony actually eats. A colony of 140 workers
+burns about 420 grains of sugar a second; the surface now offers about 1,470 grains of sugar and
+730 of protein a second across sites of 60,000-160,000, appearing every 30-70 seconds. Two real
+faults surfaced while measuring, and both are fixed at the owning layer rather than tuned away:
+
+- **The colony buried its own food.** Spoil is tipped onto the surface around the entrance, and a
+  site that appeared there was walled in by it. Foragers then planned the same impossible walk for
+  ever — a colony of 110 starved to nothing at tick 36,000 with 109,649 grains of sugar sitting
+  twelve cells from the entrance. Spoil now avoids any column a site stands in, and a site nothing
+  can path to is written off.
+- **A promised heap could be over-promised.** A forager holds its assigned heap for the whole
+  delivery, and an empty cell was accepted as a destination without re-checking the nutrient's cell
+  budget, so the last free cells could be promised to more ants than the chambers held. The store
+  then exceeded its capacity and the world invariant failed at tick 32,601. Deposits are now bounded
+  by the budget as well as by the cell.

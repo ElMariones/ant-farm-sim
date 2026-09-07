@@ -182,23 +182,32 @@ TEST_CASE("effective adaptation levels do not compound when the view is rebuilt"
 
 TEST_CASE("adaptations change simulated rates rather than task eligibility",
           "[game][progression]") {
-  ant::game::Session baseline(7);
-  ant::game::Session upgraded(7);
-  upgraded.debug_grant_work(1'000'000);
-  for (int level = 0; level < 10; ++level) {
-    REQUIRE(upgraded.buy_upgrade(UpgradeId::Excavation).accepted);
-  }
+  // The colony only digs what it needs, so a faster digger finishes the same rooms sooner rather
+  // than cutting extra ones. Hold both larders full, which is a standing reason to make more room,
+  // and the rate itself is what separates the two.
+  const auto cells_dug = [](const int levels) {
+    ant::game::Session session(7);
+    if (levels > 0) {
+      session.debug_grant_work(1'000'000);
+      for (int level = 0; level < levels; ++level) {
+        REQUIRE(session.buy_upgrade(UpgradeId::Excavation).accepted);
+      }
+    }
+    for (int second = 0; second < 600; ++second) {
+      ant::sim::World& world = session.debug_world();
+      world.debug_set_store(ant::sim::Nutrient::Carbohydrate, world.stores().carbohydrate_capacity);
+      world.debug_set_store(ant::sim::Nutrient::Protein, world.stores().protein_capacity);
+      session.step_ticks(ant::sim::kTicksPerSecond);
+    }
+    CHECK(session.world().invariant_holds());
+    return session.world().stats().cells_excavated;
+  };
 
-  // Buying a dig-rate adaptation diverges the two colonies' random draws, so a few minutes of
-  // excavation is noise. Measure over a window long enough for the rate itself to dominate.
-  baseline.step_ticks(12'000);
-  upgraded.step_ticks(12'000);
-
-  CHECK(upgraded.world().stats().cells_excavated > baseline.world().stats().cells_excavated);
+  const std::uint64_t baseline = cells_dug(0);
+  const std::uint64_t upgraded = cells_dug(10);
   // The adaptation changes how fast digging goes, not who is allowed to dig.
-  CHECK(baseline.world().stats().cells_excavated > 0);
-  CHECK(baseline.world().invariant_holds());
-  CHECK(upgraded.world().invariant_holds());
+  CHECK(baseline > 0);
+  CHECK(upgraded > baseline);
 }
 
 TEST_CASE("colony focus never removes an essential job", "[game][progression][tasks]") {

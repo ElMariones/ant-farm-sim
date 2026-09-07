@@ -590,7 +590,7 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
   terrain_revision_ = view.terrain_revision;
 }
 
-void Renderer::draw_food_source(const sim::FoodSource& source) const {
+void Renderer::draw_food_source(const sim::FoodSource& source, const bool recruiting) const {
   const Vector2 ground{static_cast<float>(source.position.x) + 0.5F,
                        static_cast<float>(source.position.y) + 1.0F};
   const float fullness =
@@ -599,6 +599,23 @@ void Renderer::draw_food_source(const sim::FoodSource& source) const {
           : std::clamp(static_cast<float>(source.amount) / static_cast<float>(source.capacity),
                        0.0F, 1.0F);
   const std::uint64_t noise = hash_pixel(source.position.x, source.position.y, 0x50D1CEULL);
+  if (!source.known) {
+    // The colony has not found it yet. Shown as a hint rather than a landmark, so watching a scout
+    // stumble onto it is the moment it becomes real.
+    const float hint = 0.9F + fullness * 1.2F;
+    DrawCircleLinesV({ground.x, ground.y - hint * 0.6F}, hint,
+                     Fade(source.nutrient == sim::Nutrient::Carbohydrate ? kCarbohydrate : kProtein,
+                          0.35F));
+    return;
+  }
+  if (recruiting) {
+    // A site the colony is calling everyone to, pulsing while the alert lasts.
+    const float beat = 0.5F + 0.5F * std::sin(animation_clock_ * 4.0F);
+    for (int ring = 1; ring <= 2; ++ring) {
+      DrawCircleLinesV({ground.x, ground.y - 1.2F}, 2.6F + static_cast<float>(ring) * 1.5F + beat,
+                       Fade(kSelection, 0.30F - static_cast<float>(ring) * 0.09F));
+    }
+  }
 
   if (source.nutrient == sim::Nutrient::Carbohydrate) {
     // A fallen berry with a spill of seed husks around it: the sweet, replenishing staple.
@@ -711,7 +728,20 @@ void Renderer::draw_world(const game::GameView& view) {
     DrawCircleV(nest, 1.6F * static_cast<float>(ring), Fade(Color{92, 74, 54, 255}, 0.06F));
   }
 
-  for (const sim::FoodSource& source : view.sources) draw_food_source(source);
+  // Rooms first, as a soft warmth on the chamber floor, so brood and grain sit inside a place.
+  for (const sim::Room& room : view.rooms) {
+    const Color glow = room.kind == sim::RoomKind::Nursery ? Color{146, 108, 74, 255}
+                                                           : Color{120, 108, 66, 255};
+    const Vector2 centre{static_cast<float>(room.centre.x) + 0.5F,
+                         static_cast<float>(room.centre.y) + 0.5F};
+    for (int ring = 3; ring >= 1; --ring) {
+      DrawCircleV(centre, static_cast<float>(room.radius) * 0.42F * static_cast<float>(ring),
+                  Fade(glow, room.complete ? 0.07F : 0.04F));
+    }
+  }
+  for (const sim::FoodSource& source : view.sources) {
+    draw_food_source(source, source.id == view.recruiting_source);
+  }
   draw_granary(view);
 
   for (const sim::BroodSnapshot& brood : view.brood) {
@@ -999,10 +1029,15 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
                    static_cast<int>(layout_.panel_body.width), static_cast<int>(layout_.panel_body.height));
   ui_.set_input_region(!scenes_.modal(), layout_.panel_body);
   const char* condition = view.extinct ? "The colony is still" : view.decline ? "The queen is gone" :
-                          view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity) ? "Nursery is full" :
+                          view.recruiting_source != 0 ? "A new food source was found" :
+                          !view.knows_any_food ? "Scouts are out searching" :
+                          view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity) ? "Brood rooms are full" :
                           view.stores.protein < 10'000 ? "Protein is running low" : "Growing steadily";
   draw_text(condition, panel_x + 22, py(116), 22, view.decline ? kProtein : kInk);
-  draw_text(TextFormat("%d workers tending %zu brood", worker_count, view.brood.size()),
+  const int nurseries = static_cast<int>(std::count_if(view.rooms.begin(), view.rooms.end(),
+      [](const sim::Room& room) { return room.kind == sim::RoomKind::Nursery; }));
+  draw_text(TextFormat("%d workers  |  %d brood rooms, %d granaries", worker_count, nurseries,
+                       static_cast<int>(view.rooms.size()) - nurseries),
             panel_x + 22, py(148), 16, kMutedInk);
 
   const Rectangle nursery_card{static_cast<float>(panel_x + 16), static_cast<float>(py(180)),
@@ -1020,9 +1055,9 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text(TextFormat("Forage %u   Dig %u   Nurse %u", view.tasks.workers_by_task[0],
                        view.tasks.workers_by_task[1], view.tasks.workers_by_task[2]),
             panel_x + 22, py(317), 16);
-  draw_text(TextFormat("%llu new cells  |  %llu births",
+  draw_text(TextFormat("%llu new cells  |  %llu sites found",
                        static_cast<unsigned long long>(view.stats.cells_excavated),
-                       static_cast<unsigned long long>(view.stats.workers_born)),
+                       static_cast<unsigned long long>(view.stats.sources_found)),
             panel_x + 22, py(338), 16, kMutedInk);
   draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, py(359), 16, kMutedInk);
 
@@ -1110,8 +1145,10 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
     const char* kind = selected->kind == sim::AntKind::Queen ? "Queen" :
                        selected->kind == sim::AntKind::WingedQueen ? "Winged queen" : "Worker";
     draw_text(kind, panel_x + 22, selected_y + 32, 20);
-    const char* activity = selected->kind == sim::AntKind::Worker ? sim::task_name(selected->task) :
-                           selected->kind == sim::AntKind::WingedQueen ? "Waiting for the flight" : "Founding queen";
+    const char* activity =
+        selected->forage_state == sim::ForageState::Scouting ? "Searching for food" :
+        selected->kind == sim::AntKind::Worker ? sim::task_name(selected->task) :
+        selected->kind == sim::AntKind::WingedQueen ? "Waiting for the flight" : "Founding queen";
     draw_text(activity, panel_x + 22, selected_y + 60, 17);
     if (selected->kind == sim::AntKind::Worker) {
       const char* cargo = selected->cargo_amount <= 0 ? "Carrying nothing" :

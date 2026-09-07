@@ -1,7 +1,7 @@
 #pragma once
 
 #include "sim/components.hpp"
-#include "sim/dig_plan.hpp"
+#include "sim/nest_plan.hpp"
 #include "sim/grid.hpp"
 #include "sim/navigation.hpp"
 #include "sim/pheromones.hpp"
@@ -17,6 +17,16 @@ namespace ant::sim {
 
 struct WorldSnapshot;
 
+// Forage sites are finite and are not restocked. New ones appear on the surface over time, and
+// the colony only knows about one after a scout has walked past it.
+inline constexpr std::size_t kMaxFoodSources = 8;
+// How close a scout must pass to notice a site.
+inline constexpr int kDiscoveryReach = 6;
+// How long the colony keeps steering foragers onto a freshly discovered site.
+inline constexpr Tick kRecruitmentTicks = 90 * kTicksPerSecond;
+// A site nobody has found rots away rather than holding a slot for ever.
+inline constexpr Tick kSourceLifetime = 300 * kTicksPerSecond;
+
 struct FoodSource {
   EntityId id{};
   GridPos position{};
@@ -24,17 +34,13 @@ struct FoodSource {
   std::int64_t amount{};
   std::int64_t capacity{};
   std::int64_t reserved{};
-  std::int64_t refill_amount{};
-  Tick refill_interval{};
-  Tick next_refill{};
+  bool known{};
+  Tick appeared{};
 };
 
 // Grains a single store cell holds. Everything the colony owns sits in one of these, so a granary
 // is a place in the nest rather than a number on the interface.
 inline constexpr std::int64_t kGrainsPerStoreCell = 1'800;
-// Brood is kept within reach of the queen; food is stockpiled in the chambers beyond that.
-inline constexpr int kNurseryRadius = 12;
-
 struct FoodPile {
   GridPos position{};
   Nutrient nutrient{Nutrient::Carbohydrate};
@@ -71,6 +77,9 @@ struct WorldStats {
   std::int64_t decayed_food{};
   std::uint64_t productive_worker_ticks{};
   std::uint64_t gynes_born{};
+  std::uint64_t sources_found{};
+  std::uint64_t sources_exhausted{};
+  std::uint64_t rooms_built{};
 };
 
 struct ActorSnapshot {
@@ -144,7 +153,15 @@ public:
   [[nodiscard]] const Grid& grid() const { return grid_; }
   [[nodiscard]] Grid& debug_grid() { return grid_; }
   [[nodiscard]] GridPos home() const { return home_; }
-  [[nodiscard]] const std::array<FoodSource, 2>& sources() const { return sources_; }
+  [[nodiscard]] const std::vector<FoodSource>& sources() const { return sources_; }
+  [[nodiscard]] const std::vector<Room>& rooms() const { return nest_plan_.rooms(); }
+  // The site the colony is currently recruiting to, while the alert lasts.
+  [[nodiscard]] EntityId recruiting_source() const {
+    return tick_ < recruit_until_ ? recruiting_source_ : 0;
+  }
+  [[nodiscard]] bool knows_any_food() const;
+  // True while the colony is short of a food it has nowhere known to collect.
+  [[nodiscard]] bool wants_scouts() const;
   [[nodiscard]] const FoodStore& stores() const { return stores_; }
   [[nodiscard]] const WorldStats& stats() const { return stats_; }
   [[nodiscard]] std::vector<ActorSnapshot> actors() const;
@@ -176,7 +193,9 @@ public:
   [[nodiscard]] WorldSnapshot snapshot() const;
 
   void debug_set_source_amount(std::size_t index, std::int64_t amount);
-  void debug_set_source_refill(std::size_t index, std::int64_t amount);
+  // Puts a fresh undiscovered site on the surface, so scouting and recruitment can be tested
+  // without waiting for the natural schedule.
+  EntityId debug_add_source(GridPos position, Nutrient nutrient, std::int64_t amount);
   void debug_set_store(Nutrient nutrient, std::int64_t amount);
   void debug_set_worker_lifespan(EntityId id, Tick lifespan);
   void debug_spawn_brood(BroodStage stage, Tick progress = 0, Tick starvation = 0,
@@ -195,7 +214,15 @@ public:
 private:
   void spawn_queen();
   void spawn_workers();
-  void refill_sources();
+  void spawn_food_sources();
+  void place_food_source();
+  [[nodiscard]] int surface_row(int x) const;
+  [[nodiscard]] FoodSource* find_source(EntityId id);
+  [[nodiscard]] const FoodSource* find_source(EntityId id) const;
+  void discover_source(FoodSource& source);
+  void retire_spent_sources();
+  void process_scout(entt::entity entity, int& path_budget);
+  [[nodiscard]] int scout_cap() const;
   void refresh_home_field();
   // Splits the connected nest into the brood ring around the queen and the store chambers beyond
   // it, and derives store capacity from the cells that actually exist. Purely a function of the
@@ -208,13 +235,16 @@ private:
   [[nodiscard]] std::optional<GridPos> store_target(Nutrient nutrient, EntityId bias) const;
   // Whether one more grain of `nutrient` could be set down in this cell.
   [[nodiscard]] bool accepts_food(GridPos cell, Nutrient nutrient) const;
+  // Whether the nutrient may still claim another store cell.
+  [[nodiscard]] bool store_cells_left(Nutrient nutrient) const;
   [[nodiscard]] std::optional<GridPos> nursery_target(EntityId ignore_brood) const;
   [[nodiscard]] bool in_nursery(GridPos cell) const;
   std::int64_t deposit_food(GridPos cell, Nutrient nutrient, std::int64_t amount);
   void stock_granary(Nutrient nutrient, std::int64_t amount);
   void store_cargo(entt::entity entity, int& path_budget);
   void process_forager(entt::entity entity, int& path_budget);
-  void choose_source(entt::entity entity, int& path_budget);
+  // False when the colony knows of nowhere left to forage, which is what sends a worker scouting.
+  [[nodiscard]] bool choose_source(entt::entity entity, int& path_budget);
   void refresh_path(entt::entity entity, int& path_budget);
   bool move_one_tick(entt::entity entity);
   void arrive(entt::entity entity, int& path_budget);
@@ -253,21 +283,20 @@ private:
   Grid grid_;
   GridPos home_{};
   HomeField home_field_;
-  std::array<FoodSource, 2> sources_{};
+  std::vector<FoodSource> sources_;
   FoodStore stores_{60'000, 30'000, 200'000, 100'000};
   WorldStats stats_{};
   Pcg32 behavior_rng_;
   Pcg32 lifecycle_rng_;
+  // Where and when new forage sites appear. Kept apart from behaviour and life cycle so a colony
+  // that acts differently still meets the same food.
+  Pcg32 world_rng_;
   TrailField trails_;
   TaskDiagnostics task_diagnostics_{};
-  // A few persistent dig faces rather than a ranked heap of loose cells, so excavation reads as
-  // corridors and chambers. Worker commitments are retallied once per tick: counting them per
-  // excavator meant rescanning every worker and made the tick cost quadratic.
-  DigPlan dig_plan_;
-  // Connected Air cells that touch diggable ground, collected by the same BFS that measures nest
-  // air, and used to seed an idle face.
-  std::vector<GridPos> dig_candidates_;
-  std::uint64_t frontier_revision_{};
+  // Excavation exists to build rooms. One project at a time, so the colony finishes a chamber
+  // before starting the next and the nest reads as rooms joined by the corridors that reached them.
+  NestPlan nest_plan_;
+  std::uint64_t rooms_version_{1};
   std::vector<std::uint16_t> dig_work_;
   std::vector<BroodSnapshot> brood_;
   std::vector<CorpseSnapshot> corpses_;
@@ -279,6 +308,12 @@ private:
   std::vector<std::uint8_t> nursery_mask_;
   std::vector<GridPos> store_cells_;
   std::uint64_t zone_revision_{};
+  std::uint64_t zone_rooms_version_{};
+  Tick next_source_spawn_{};
+  EntityId recruiting_source_{};
+  Tick recruit_until_{};
+  // Scouts alive at the start of this tick, so the colony sends a few searchers and the rest wait.
+  int scouting_workers_{};
   int connected_nest_air_{};
   int starting_nest_air_{};
   int nursery_capacity_{12};
