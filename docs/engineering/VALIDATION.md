@@ -1,6 +1,6 @@
 # Validation strategy
 
-No game checks have run during the planning phase because no game code exists. This document specifies evidence required as implementation arrives.
+This document specifies required evidence. Current executed checks are recorded in STATUS and NEXT_STEPS; an unmeasured target below is not a delivered result.
 
 ## Test layers
 
@@ -57,9 +57,9 @@ Warm up for 10 seconds, measure at least 60 seconds wall time for frame/tick rat
 
 At 5x a 20 Hz sim needs 100 ticks/sec; “5 ms per tick” alone does not prove a 60 FPS combined renderer budget. Measure the integrated loop, terrain rebuilds, paths, and saves. Disable automatic high-speed selection if real hardware cannot sustain it.
 
-## Planned build verification
+## Build verification
 
-T001 must implement and execute:
+The implemented presets provide:
 
 ```text
 cmake --preset headless
@@ -72,7 +72,7 @@ cmake --preset release
 cmake --build --preset release
 ```
 
-These commands are a target interface, **not currently runnable**. Add a sanitizer configuration when movement/components exist. CI must prove headless configuration excludes desktop graphics dependencies; avoid a virtual display as a substitute for a true headless sim.
+These commands are implemented; record which were actually run for each change. A sanitizer configuration and its evidence remain part of T015. CI must prove headless configuration excludes desktop graphics dependencies; avoid a virtual display as a substitute for a true headless sim.
 
 ## Release evidence
 

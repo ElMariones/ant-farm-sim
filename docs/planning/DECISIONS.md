@@ -39,3 +39,9 @@ Accepted design baseline, 2026-09-06. These are product/architecture decisions, 
 The owner should choose the project license and any final commercial name. M0 dependency pins and their license records are now fixed in `docs/engineering/DEPENDENCIES.md`; changes require a new compatibility check and decision entry. Signing/notarization and public binary release await packaging/user release intent. Music, paid assets, and model-generated art are not necessary to execute the current plan.
 
 When changing an accepted decision, append a dated entry with the previous rule, new rule, rationale, affected tasks/contracts, and migration/validation consequences. Do not silently edit the archive to make history agree with the new design.
+
+## D021 — Repair observation before release packaging (2026-09-07)
+
+The user requested a commit/work audit and a guide for natural tunnels, varied movement, subtle within-species appearance, working selection and better UI flow. Previously T014 was a broad UI task followed by hardening. The new order in [NEXT_STEPS](NEXT_STEPS.md) starts with T014a input correctness, splits renewed excavation/navigation acceptance into T006a/b and T003a/b, re-baselines T013a, then closes T014 and the remaining T015/T016 gates. M0–M4 historical delivery is retained; T015 is explicitly partial.
+
+The direction remains a 2D cross-section, one species and fixed 20 Hz simulation. Cosmetic variation is presentation-only; routes and active digging state are deterministic and require complete snapshot/migration treatment. No new biology systems, 3D engine or automatic terrain carving are authorized by this revision. New numeric geometry/appearance ranges are initial tuning proposals, not completed or measured behavior.

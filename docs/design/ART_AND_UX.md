@@ -28,7 +28,7 @@ These are art tokens, not verified contrast ratios. Verify actual UI text/backgr
 
 Worker sprites should show head/thorax/abdomen and legs at close zoom; draw a clean ant silhouette at middle zoom and a moving dot with cargo accent at far zoom. The queen is approximately 2x worker length. Selection uses an outline and label. Avoid drawing every leg at all distances.
 
-**Implemented.** Ants are built from oriented segments along a heading derived from actual travel, so an ant walking right faces right; a stopped ant keeps the heading it last had. Below zoom 2.6 an ant is a dot with its cargo accent; from 2.6 it gains gaster, petiole, thorax and head with a lighter sheen along the top; from 5.5 it gains a six-legged alternating tripod gait, elbowed antennae, mandibles and eyes, with limbs a shade darker than the body so they read as legs. Winged queens carry two translucent swept wings and sit between worker and queen in size. Cargo is held at the mandibles rather than floating overhead, and spoil and corpses are drawn as well as food. Chitin is warm brown rather than UI ink so an ant reads against the near-black tunnel.
+**Implemented.** Ants are built from oriented segments along a heading derived from actual travel, so an ant walking right faces right; a stopped ant keeps the heading it last had. Below zoom 1.8 an ant is a dot with its cargo accent; from 1.8 it gains gaster, petiole, thorax and head with a lighter sheen along the top; from 3.0 it gains a six-legged alternating tripod gait, elbowed antennae, mandibles and eyes, with limbs a shade darker than the body so they read as legs. Winged queens carry two translucent swept wings and sit between worker and queen in size. Cargo is held at the mandibles rather than floating overhead, and spoil and corpses are drawn as well as food. Chitin is warm brown rather than UI ink so an ant reads against the near-black tunnel.
 
 ## Desktop layout
 
@@ -93,3 +93,7 @@ Do a camera-and-ant legibility pass in the first visual slice; custom player-fac
 ## Required visual review scenes
 
 Starter farm; busy 100-worker nursery; 1,000-worker overview; selected ant with cargo; food shortage; unavailable upgrade; flight preview; corrupted-save recovery; minimum-size window; Retina UI scaling; keyboard-only focus navigation. Record which scenes actually exist at each milestone.
+
+## Accepted next visual and interaction work (2026-09-07)
+
+[NEXT_STEPS](../planning/NEXT_STEPS.md) defines the requested subtle worker size/color variation, shared drawn/picked poses, input ownership, responsive inspector and complete generation flow. These are implementation requirements for T014a–d, not delivered features. Existing whole-map terrain baking is implemented; chunk dirty uploads above remain a performance target.

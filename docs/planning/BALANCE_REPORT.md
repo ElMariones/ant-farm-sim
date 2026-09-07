@@ -21,15 +21,15 @@ nursing, foraging, queen.
 
 | Policy | Time to flight | Maturity | First purchase | Peak workers | Deaths | Payout |
 |---|---|---|---|---|---|---|
-| No purchase | 39.8–39.9 min | mean 32.3 min | — | 148–153 | 40–48 | 4 |
+| No purchase | 39.8–39.9 min | mean 32.3 min | — | 147–153 | 38–46 | 4 |
 | Buy cheapest | 31.7–31.9 min | mean 26.9 min | 2.8–3.0 min | 172–179 | 10–17 | 4 |
 
 Both policies land inside ECONOMY's 30–45 minute first-prestige target on all five seeds, and the
 first investment lands inside the 2–4 minute target. **All ten runs survive**; none declines or
 goes extinct.
 
-Investment is worth roughly **ten minutes off the run** (a 24% reduction), nearly **four times
-fewer deaths**, and about **30 more workers at peak**. The dominant reported bottleneck in every
+From the rows below, investment saves a mean **483.4 seconds (8.1 minutes, 20.2%)**,
+reduces mean deaths from **42 to 14.4** (65.7%), and adds **25.2 peak workers** on average. The dominant reported bottleneck in every
 run is "Brood needs nursing".
 
 ## Per seed
@@ -47,7 +47,7 @@ run is "Brood needs nursing".
 | 2026 | none | 2392 | 1941 | — | 223 | 152 | 148 | 40 |
 | 2026 | buy | 1907 | 1607 | 178 | 216 | 172 | 172 | 17 |
 
-Spread across seeds is tight: 10 s between the slowest and fastest no-purchase flight, 35 s
+Spread across seeds is tight: 4 s between the slowest and fastest no-purchase flight, 8 s
 between buy-cheapest flights. Every run reaches flight with the minimum eligible payout of 4,
 because the policy flies immediately rather than waiting for a larger reward.
 
@@ -56,7 +56,8 @@ because the policy flies immediately rather than waiting for a larger reward.
 Same seed, same action policy, permanent traits owned at founding.
 
 **A completed trait branch reaches flight sooner on every seed.** This is the demonstration that a
-second run is measurably stronger:
+fully upgraded run is measurably stronger. Each full branch costs 57 Legacy, so these
+comparisons do not establish the benefit affordable after the first four-Legacy flight:
 
 | Seed | Base flight (s) | Vigor IV (s) | Delta | Industry IV (s) | Delta |
 |---|---|---|---|---|---|
@@ -68,9 +69,9 @@ second run is measurably stronger:
 
 Vigor IV is worth a mean **-56.4 s** and Industry IV **-47.2 s**, each faster on **5 of 5 seeds**.
 
-**A single tier-1 trait is inside the noise.** Vigor I moves flight by a few seconds out of roughly
+**A single tier-1 trait has no consistent reported benefit.** Vigor I moves flight by a few seconds out of roughly
 1,900, and its effect on time to first birth swings between −21 s and +49 s depending on seed;
-Industry I behaves the same way. This is an honest negative result rather than a bug: the run is
+Industry I behaves the same way. This is a reported negative result requiring a controlled local comparison: the run is
 gated by maturity (150 births, 100 living workers, 720 s), and one tier of one branch is too small
 to shift a gate that far downstream. It does mean the first flight's four Legacy buys an
 improvement the player is unlikely to feel, which is a design question worth revisiting — the
@@ -120,6 +121,12 @@ for more:
 No ECONOMY constant was changed in T013. The documented starting values still stand; the T008
 Work-threshold retune (200 → 1,200 ticks per Work) remains the only balance constant changed in
 this project so far.
+
+## Audit note (2026-09-07)
+
+Summary arithmetic above was corrected from the existing rows, not from fresh balance runs.
+Older STATUS measurements are historical and differ from this later table. Reproduce and record
+a revision/content hash before tuning; T013a in NEXT_STEPS requires first-affordable-trait evidence.
 
 ## Open balance questions
 

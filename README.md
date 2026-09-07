@@ -17,6 +17,7 @@ A desktop incremental game about nurturing an autonomous ant colony: watch tunne
 - [Implementation backlog](docs/planning/BACKLOG.md): ordered work packets and acceptance criteria.
 - [Validation plan](docs/engineering/VALIDATION.md): headless tests, benchmarks, and visual review.
 - [Project status](docs/planning/STATUS.md): current state and next task.
+- [Audit and next steps](docs/planning/NEXT_STEPS.md): commit review, defects, tunnel/movement design and ordered M5 acceptance gates.
 - [Balance report](docs/planning/BALANCE_REPORT.md): measured seeded runs, pacing, and second-run proof.
 - [Decision log](docs/planning/DECISIONS.md): rationale and deferred features.
 - [Session handoff](docs/planning/HANDOFF_TEMPLATE.md): reusable implementation-session checklist.
@@ -36,7 +37,7 @@ ctest --preset dev
 
 The app supports a resizable 1440×900-requested window (fitted to the visible desktop when necessary), a 1024×640 minimum, pointer-centered wheel zoom, drag pan, ant inspection, pause/resume, and 1×/5×/20× speed. Its calm paper-and-diorama interface uses a high-resolution bundled Nunito atlas with DPI-aware rendering for crisp Retina text. Space toggles pause; `1`, `2`, and `3` select speeds; `I` toggles the inspector; WASD/arrows pan; `+`/`-` zoom.
 
-`F1`–`F4` buy the four run adaptations, `B`/`G`/`X`/`F` set colony focus once twelve workers are alive, and `S` saves immediately. `L` opens the flight and Legacy panel: it shows the readiness checklist and the exact payout while a colony is running, and between colonies it sells permanent traits (`V` Vigor, `Y` Industry) and founds the next colony (`C`). `Enter` sends the flight when every condition is met. The same actions are available as temporary cards and buttons in the inspector panel; T014 replaces them with the final layout.
+`F1`–`F4` buy the four run adaptations, `B`/`G`/`X`/`F` set colony focus once twelve workers are alive, and `S` saves immediately. `L` opens the flight and Legacy panel: it shows the readiness checklist and the exact payout while a colony is running, and between colonies it sells permanent traits (`V` Vigor, `Y` Industry) and founds the next colony (`C`). `Enter` sends the flight when every condition is met. Adaptations, focus, speed, pause and save have temporary pointer controls. Flight, permanent-trait purchase and founding currently require keyboard actions; T014 adds their pointer controls and confirmation flow. Selection and modal input have known defects documented in the audit.
 
 ### Saving
 

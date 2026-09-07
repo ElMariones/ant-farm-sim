@@ -10,11 +10,11 @@ M4 completes the generation loop. A colony latches **maturity** at 100 living wo
 
 ## Active scope
 
-**Next: M5 — Release candidate (T014).** Replace the temporary economy and flight controls with the ART_AND_UX layout, onboarding and accessibility, then profile and package.
+**Completed: review and next-step design (2026-09-07).** Audited committed work and defined the requested tunnel, movement, appearance, selection and UI improvements. Fresh headless build and CTest pass: 113/113 in 118.60 s; no new native UI review. See [NEXT_STEPS](NEXT_STEPS.md). Next implementation: **T014a — reliable selection and modal input**; then the ordered M5 slices below.
 
 Suggested prompt for a smaller model:
 
-> Read AGENTS.md and docs/planning/STATUS.md, then implement T014 from docs/planning/BACKLOG.md. Preserve deterministic command validation and exact integer accounting. Inspect existing changes first, run the documented headless and dev tests, update affected contracts and STATUS, and commit with the required identity and a descriptive body.
+> Read AGENTS.md, docs/planning/STATUS.md and docs/planning/NEXT_STEPS.md, then implement T014a from docs/planning/BACKLOG.md. Preserve deterministic command validation and exact integer accounting. Inspect existing changes first, run the documented headless and dev tests, update affected contracts and STATUS, and commit with the required identity and a descriptive body.
 
 ## Milestone state
 
@@ -26,13 +26,15 @@ Suggested prompt for a smaller model:
 | M2 Living colony | Complete — T005–T007 |
 | M3 Safe incremental slice | Complete — T008–T010 |
 | M4 Complete generation loop | Complete — T011–T013 |
-| M5 Release candidate | In progress — T015 performance done; T014 UI and T016 packaging open |
+| M5 Release candidate | In progress — T014 partial; T015 optimization partial, full performance gate open; T016 partial |
 
 ## Environment observations
 
 Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.4.3 using Unix Makefiles. First configure downloads pinned source dependencies; warmed headless configure/build has no graphics dependency, and the headless binary links only libc++ and libSystem. `clang-format` is not installed on this machine and CI does not gate on formatting, so no reformatting pass was run.
 
-## Validation of this deliverable
+## Earlier implementation evidence
+
+The entries below record earlier sessions, not a fresh audit run. Later entries supersede earlier measurements. The current audit and its validation are recorded in NEXT_STEPS.
 
 - `ctest --preset headless`: pass, **113/113 tests including the sixty-minute soak**, in 270 s. The soak alone is 101 s in Debug, against CTest's 1,500 s limit; it previously timed out on the Linux runner.
 - `cmake --preset release` and `cmake --build --preset release`: pass.
@@ -174,10 +176,10 @@ Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. 
 
 ## Open work
 
-No blocker for T014.
+Start with T014a. The audit in NEXT_STEPS supersedes the old next-task order. Historical visual reviews below do not establish that current input routing works.
 
 - **The surface view was not re-photographed after the final art pass.** The window server stopped accepting new windows partway through review (`GLFW: Failed to determine Monitor to center Window`), so the last captures are of the nursery at zoom 11, which does show the reworked ants, brood, queen and terrain. The surface, food sources and foraging column at mid zoom were reviewed before the final colour and limb-tone tweaks but not after them.
 - **Keyboard activation was not exercised interactively.** The flight, trait and found-colony key handlers were verified through unit tests against a real `SaveService` and their panels were rendered and photographed, but this session had no way to send key presses to the raylib window. The same limitation applies to the recovery prompt's `R`/`N` keys from M3.
-- **Excavation task selection is O(workers²) per tick.** Each excavating worker scans every worker to count frontier claims, costing about 22 ms per tick at 159 workers in a Debug build. This dominates test runtimes and is the first thing T015 should measure.
-- Industry I has no metric that improves; payouts of 6 and 8 are verified arithmetically but not reached in a measured run. Both are recorded in the balance report.
+- The quadratic frontier-claim scan was fixed in `f564fb0`; it is not an open defect. The full T015 population, memory, sanitizer and two-hour gates remain open.
+- First-purchase permanent-trait value remains unproven: full-branch comparisons cost 57 Legacy and cannot stand in for the first four-Legacy reward. Payouts of 6 and 8 still need measured wait-policy runs; see NEXT_STEPS and BALANCE_REPORT.
 - Player-facing UI is still temporary cards and key bindings pending T014. Trails bias source choice but are not rendered as a debug overlay. Profiling, ASan/UBSan and `.app` packaging remain in M5. No project license has been chosen.

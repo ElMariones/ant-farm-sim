@@ -164,3 +164,7 @@ A tick's travel is spent along x first and any remainder along y, never stepping
 either axis. Stepping a fixed distance on one axis at a time overshot the target column and the ant
 ping-ponged across it forever without ever closing the distance in y. About a fifth of workers were
 stuck this way, and because they moved every tick they counted as productive while doing no work.
+
+## Accepted colony behavior revision (2026-09-07; not yet implemented)
+
+See [NEXT_STEPS](../planning/NEXT_STEPS.md) for T006a/b and T003a/b: persistent bounded dig faces forming connected corridors and chambers; deterministic per-ant route variation; collision-safe diagonal fixed-point travel; and separate useful-space accounting. The current code still uses home-biased frontiers, four-neighbor routing and X-first travel. Implement snapshot/migration and balance checks together with those changes; the guide does not silently change existing saves.

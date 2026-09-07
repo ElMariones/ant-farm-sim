@@ -15,6 +15,26 @@ All tasks below are **not started** unless STATUS records completion with eviden
 
 Do not wait until M5 to view the application. M1 is a visual quality checkpoint; M3 is the first saveable gameplay checkpoint. Stop adding scope if either is not convincing.
 
+## M5 revised work order — 2026-09-07
+
+The [audit and design guide](NEXT_STEPS.md) defines source findings, implementation details and acceptance checks for these stable child IDs. All children below are **not started**; the audit itself is complete. Existing parent criteria remain binding.
+
+| Task | Scope | Depends on | Minimum completion evidence |
+|---|---|---|---|
+| **T014a — next ready** | DPI-correct rendered-pose selection, click/pan separation, modal ownership, Escape/save keys, selection lifecycle and responsive inspector | T012 | Native moving-ant selection at both sizes/DPI, no modal click-through, gesture and scene tests |
+| T006a | Persistent bounded dig faces, connected corridors, branch/chamber geometry, explicit spoil overflow | T014a | Seeded tunnel time sequences; contention, unreachable-face and spoil accounting tests |
+| T003a | Deterministic per-ant route tie variation | T006a | Multiple legal routes in wide fixture, narrow-route success and continuation equality |
+| T003b | Weighted diagonal navigation, fixed-point 2D travel and safe lane offsets | T003a | All octants, speed, no corner cuts, topology invalidation and mid-route saves |
+| T014b | Subtle stable size/color/gait variation using shared render/pick poses | T003b | Zoom-tier native captures, stable reload appearance, unchanged sim state |
+| T006b | Separate useful chamber capacity from transit air, compatibility accounting | T006a, T003b | No double-granted capacity on migration/reload; reachable-space invariants |
+| T013a | Re-baseline geometry/motion, affordable first trait, delayed flight and long-lived colony policies | T006b, T003b | Five seeds × both policies, tier-I local benefit measurement, larger-payout and no-flight evidence |
+| T014c | Pointer/keyboard flight confirmation, shop resume, save failure and normal defeat restart | T014a, T013a | Actual cancel/commit/shop/reload/new-colony flow with both input methods |
+| T014d | Onboarding, trends, four clear cards, scaling and reduced motion | T014b, T014c | Required scenes, minimum-size/scaling/focus review; limitations recorded |
+| T015 remaining | Population/renderer/save benchmarks, sanitizers, two-hour soak | T013a, T014d | Full VALIDATION report or explicit release scope reduction |
+| T016 remaining | `.app`, archive/version/attribution and external launch/restart | T015 | Local package works independently of cwd; publication only if requested |
+
+T015's once-per-tick claim optimization is delivered; its full gate is not. Do not repeat that optimization or mark the full task complete from the sixty-minute test. T006/T003 children reopen experience quality rather than erasing historical M1/M2 delivery.
+
 ## T001 — Bootstrap build, libraries, and tests
 
 Dependencies: none. Read ARCHITECTURE, AGENTS, VALIDATION.

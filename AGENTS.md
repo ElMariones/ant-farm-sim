@@ -2,7 +2,7 @@
 
 ## Current project and authority
 
-This is a C++20 desktop incremental colony game in its planning phase. The user's current deliverable is a detailed design and implementation handoff; game code has not been started. Do not infer a working build from proposed paths or commands.
+This is an implemented C++20 desktop incremental colony game. M0–M4 systems exist; M5 experience, hardening and packaging work is incomplete. Read STATUS and the audit in docs/planning/NEXT_STEPS.md for current evidence. Proposed behavior is not implemented merely because it appears in a guide.
 
 Read in this order at the start of a coding session:
 
@@ -57,4 +57,4 @@ Each commit body describes what changed, why, and what was verified. Push only t
 
 ## Build commands
 
-There are none yet. M0 must introduce and verify `dev`, `headless`, and `release` CMake presets plus CTest integration. Thereafter read actual commands from README, not from remembered commands in another repository.
+The `dev`, `headless`, and `release` CMake presets and CTest integration exist. Read actual commands from README; do not use remembered commands from another repository.
