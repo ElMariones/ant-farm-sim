@@ -109,6 +109,9 @@ TEST_CASE("purchased adaptations and focus survive a round trip", "[persistence]
   session.debug_grant_work(500);
   REQUIRE(session.buy_upgrade(ant::game::UpgradeId::Excavation).accepted);
   REQUIRE(session.buy_upgrade(ant::game::UpgradeId::Foraging).accepted);
+  // Run on until focus unlocks rather than assuming a particular tick, so a change in growth
+  // pacing does not look like a persistence failure.
+  for (int tick = 0; tick < 8'000 && !session.focus_available(); ++tick) session.step();
   REQUIRE(session.focus_available());
   REQUIRE(session.set_focus_command(ant::sim::Focus::Expansion).accepted);
   session.step_ticks(50);

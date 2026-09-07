@@ -23,6 +23,11 @@ public:
   [[nodiscard]] bool in_bounds(GridPos position) const;
   [[nodiscard]] Material at(GridPos position) const;
   [[nodiscard]] bool passable(GridPos position) const;
+  // Where an ant can actually stand. Enclosed tunnels are always walkable; open sky only counts
+  // when something solid is within touching distance, so ants follow the ground contour and the
+  // spoil mound instead of striding through mid-air. Diagonal support is allowed so a one-cell
+  // step can still be climbed with four-way movement.
+  [[nodiscard]] bool walkable(GridPos position) const;
   void set(GridPos position, Material material);
 
   [[nodiscard]] std::uint64_t navigation_revision() const { return navigation_revision_; }

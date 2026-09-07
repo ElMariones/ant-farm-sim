@@ -43,6 +43,11 @@ public:
   void open_legacy_panel() { legacy_panel_open_ = true; }
   void set_zoom(float zoom) { camera_.set_zoom(zoom); }
   void focus(sim::GridPos cell) { camera_.focus(cell); }
+  [[nodiscard]] Rectangle debug_viewport() const { return camera_.viewport(); }
+  [[nodiscard]] Vector2 debug_target() const { return camera_.camera().target; }
+  [[nodiscard]] Vector2 debug_offset() const { return camera_.camera().offset; }
+  [[nodiscard]] float debug_zoom() const { return camera_.zoom(); }
+  [[nodiscard]] Vector2 debug_world_to_screen(Vector2 world) const { return GetWorldToScreen2D(world, camera_.camera()); }
 
 private:
   void draw_world(const game::GameView& view, double interpolation_alpha);

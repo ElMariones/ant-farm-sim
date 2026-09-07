@@ -7,6 +7,7 @@
 #include <cmath>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace ant::presentation {
 namespace {
@@ -493,18 +494,25 @@ void Renderer::draw_world(const game::GameView& view, const double interpolation
                    {0.0F, 0.0F}, 0.0F, WHITE);
   }
 
-  // Grass tufts: a few blades per clump, leaning and varying in tone.
+  // Grass tufts: a few blades per clump, leaning and varying in tone. Blades sit on whatever the
+  // real surface height is, so they grow on top of the spoil mound instead of being buried in it.
   for (int x = 0; x < view.grid_width; ++x) {
     const std::uint64_t noise = hash_pixel(x, 3, view.seed);
     if (noise % 3ULL != 0) continue;
+    int surface = 32;
+    for (int y = 8; y < 40; ++y) {
+      const sim::Material material = view.terrain[static_cast<std::size_t>(y * view.grid_width + x)];
+      if (material != sim::Material::Sky && material != sim::Material::Air) { surface = y; break; }
+    }
+    const float ground = static_cast<float>(surface);
     const int blades = 2 + static_cast<int>((noise >> 6U) % 3ULL);
     for (int blade = 0; blade < blades; ++blade) {
       const float offset = static_cast<float>((noise >> (8U + 3U * static_cast<unsigned>(blade))) % 9ULL) * 0.1F;
       const float height = 0.9F + static_cast<float>((noise >> (5U + static_cast<unsigned>(blade))) % 6ULL) * 0.22F;
       const float lean = (static_cast<float>((noise >> (11U + static_cast<unsigned>(blade))) % 7ULL) - 3.0F) * 0.14F;
       const Color tone = shade(kFoliage, static_cast<int>((noise >> (13U + static_cast<unsigned>(blade))) % 25ULL) - 12);
-      DrawLineEx({static_cast<float>(x) + offset, 32.0F},
-                 {static_cast<float>(x) + offset + lean, 32.0F - height}, 0.28F, tone);
+      DrawLineEx({static_cast<float>(x) + offset, ground},
+                 {static_cast<float>(x) + offset + lean, ground - height}, 0.28F, tone);
     }
   }
 
@@ -613,8 +621,9 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const double interpolat
     DrawCircleLinesV(centre, 2.5F * scale, Fade(kSelection, 0.45F));
   }
 
-  // Far out an ant is a moving dot; the cargo accent is what stays readable.
-  if (zoom < 2.6F) {
+  // Far out an ant is a moving dot; the cargo accent is what stays readable. These thresholds are
+  // in logical pixels per cell, so they hold on any display scale.
+  if (zoom < 1.8F) {
     DrawCircleV(centre, 0.8F * scale, body);
     if (actor.cargo_amount > 0 && actor.cargo_kind == sim::CargoKind::Food) {
       DrawCircleV(offset_along(centre, heading, 0.9F * scale, 0.0F), 0.45F * scale,
@@ -623,7 +632,7 @@ void Renderer::draw_ant(const sim::ActorSnapshot& actor, const double interpolat
     return;
   }
 
-  const bool detailed = zoom >= 5.5F;
+  const bool detailed = zoom >= 3.0F;
   const Vector2 gaster = offset_along(centre, heading, -0.95F * scale, 0.0F);
   const Vector2 thorax = offset_along(centre, heading, 0.05F * scale, 0.0F);
   const Vector2 head = offset_along(centre, heading, 0.85F * scale, 0.0F);
@@ -732,10 +741,19 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text("LIVING COLONY", 23, 44, 13, kMutedInk);
   const int metric_start = width >= 1180 ? 190 : 170;
   const int metric_width = width >= 1180 ? 145 : 125;
-  const std::array<std::pair<const char*, std::string>, 4> metrics{{
+  std::vector<std::pair<const char*, std::string>> metrics{
       {"WORKERS", std::to_string(worker_count)}, {"BROOD", std::to_string(view.brood.size())},
       {"CARBS", TextFormat("%lld", static_cast<long long>(view.stores.carbohydrate / 1000))},
-      {"PROTEIN", TextFormat("%lld", static_cast<long long>(view.stores.protein / 1000))}}};
+      {"PROTEIN", TextFormat("%lld", static_cast<long long>(view.stores.protein / 1000))},
+      {"WORK", std::to_string(view.work)}};
+  // Winged queens and Legacy only appear once they mean something, so an early colony is not shown
+  // counters it cannot act on.
+  if (view.legacy.flight.live_winged_queens > 0) {
+    metrics.emplace_back("WINGED", std::to_string(view.legacy.flight.live_winged_queens));
+  }
+  if (view.legacy.wallet > 0 || view.legacy.successful_flights > 0) {
+    metrics.emplace_back("LEGACY", std::to_string(view.legacy.wallet));
+  }
   for (std::size_t index = 0; index < metrics.size(); ++index) {
     const int x = metric_start + static_cast<int>(index) * metric_width;
     draw_text(metrics[index].first, x, 14, 12, kMutedInk);
@@ -782,7 +800,7 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   const int panel_width = width >= 1120 ? 320 : 300;
   const int panel_x = width - panel_width;
   DrawRectangle(panel_x - 7, 72, 7, height - 132, Color{37, 45, 40, 35});
-  DrawRectangle(panel_x, 72, panel_width, height - 132, Color{246, 239, 220, 248});
+  DrawRectangle(panel_x, 72, panel_width, height - 132, kPaperSoft);
   draw_text("COLONY", panel_x + 22, 92, 15, kMutedInk);
   const char* condition = view.extinct ? "The colony is still" : view.decline ? "The queen is gone" :
                           view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity) ? "Nursery is full" :
@@ -877,14 +895,40 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,576,14,kMutedInk);
   /* Selection stays available in the world; temporary M3 cards occupy the inspector detail area. */
 
-  if (height >= 720) {
-    const int note_y = height - 178;
-    DrawRectangleRounded({static_cast<float>(panel_x + 16), static_cast<float>(note_y),
-                          static_cast<float>(panel_width - 32), 82.0F}, 0.12F, 6,
-                         Color{224, 231, 207, 255});
-    draw_text("A LIVING SYSTEM", panel_x + 30, note_y + 14, 13, Color{65, 92, 68, 255});
-    draw_text("Ants choose work from the", panel_x + 30, note_y + 35, 16);
-    draw_text("colony's changing needs.", panel_x + 30, note_y + 57, 16);
+  if (height < 720) return;
+  DrawLine(panel_x + 20, 596, width - 20, 596, kWarmLine);
+  draw_text("SELECTED", panel_x + 22, 606, 13, kMutedInk);
+  const sim::ActorSnapshot* selected = nullptr;
+  for (const sim::ActorSnapshot& actor : view.actors) {
+    if (selected_id_ == actor.id) { selected = &actor; break; }
+  }
+  if (selected == nullptr) {
+    draw_text("Click an ant to follow its work.", panel_x + 22, 630, 16, kMutedInk);
+  } else {
+    const char* kind = selected->kind == sim::AntKind::Queen      ? "Queen"
+                       : selected->kind == sim::AntKind::WingedQueen ? "Winged queen"
+                                                                     : "Worker";
+    draw_text(TextFormat("%s  #%llu", kind, static_cast<unsigned long long>(selected->id)),
+              panel_x + 22, 628, 19);
+    if (selected->kind == sim::AntKind::Worker) {
+      draw_text(sim::task_name(selected->task), panel_x + 22, 654, 17);
+      const char* carried =
+          selected->cargo_amount <= 0 ? "Carrying nothing"
+          : selected->cargo_kind == sim::CargoKind::Spoil  ? "Carrying spoil to the surface"
+          : selected->cargo_kind == sim::CargoKind::Corpse ? "Carrying a fallen sister"
+          : TextFormat("Carrying %lld %s", static_cast<long long>(selected->cargo_amount / 1000),
+                       nutrient_name(selected->cargo_nutrient));
+      draw_text(carried, panel_x + 22, 677, 15, kMutedInk);
+      draw_text(TextFormat("%llu seconds old",
+                          static_cast<unsigned long long>(selected->age / sim::kTicksPerSecond)),
+                panel_x + 22, 697, 15, kMutedInk);
+    } else if (selected->kind == sim::AntKind::WingedQueen) {
+      draw_text("Waiting for the flight", panel_x + 22, 654, 17);
+      draw_text("Does not work or forage", panel_x + 22, 677, 15, kMutedInk);
+    } else {
+      draw_text(view.queen_alive ? "Laying and well tended" : "Deceased", panel_x + 22, 654, 17);
+      draw_text("The colony ends with her", panel_x + 22, 677, 15, kMutedInk);
+    }
   }
 }
 

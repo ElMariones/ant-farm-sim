@@ -34,7 +34,7 @@ Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.
 
 ## Validation of this deliverable
 
-- `ctest --preset headless`: pass, **113/113 tests including the sixty-minute soak**, in 183 s. The soak previously timed out on the Linux runner; CI is green on Linux and macOS again.
+- `ctest --preset headless`: pass, **113/113 tests including the sixty-minute soak**, in 270 s. The soak alone is 101 s in Debug, against CTest's 1,500 s limit; it previously timed out on the Linux runner.
 - `cmake --preset release` and `cmake --build --preset release`: pass.
 - `ant_headless --verify-round-trip` passes at 20,000 / 60,000 / 100,000 / 120,000 / 140,000 / 160,000 / 200,000 ticks on seed 42, and at 40,000 and 120,000 ticks on seeds 1, 7, 101 and 2026.
 
@@ -83,6 +83,33 @@ Four real bugs surfaced by pushing further than M3 did:
 4. **Save/load lost path and frontier staleness**, so a resumed colony skipped a replan it still owed itself and diverged from an uninterrupted run after roughly 20,000 ticks. Staleness is now stored as a fact and restored with revision 0, which the grid never issues.
 
 The profile schema is **version 2**, with a tested in-memory v1 migration that fills castes, traits, the maturity latch and the flight receipt, and keeps the migrated colony's canonical hash.
+
+### Visual pass on the real window (M5)
+
+Reviewed by capturing the actual window with `screencapture` rather than raylib's `TakeScreenshot`,
+which on this display writes a doubled canvas and cannot be trusted for layout. Five defects were
+found and fixed, four of which the in-game screenshot had been hiding or that no test could catch:
+
+1. **The world rendered at half scale on Retina.** `BeginMode2D` replaces raylib's high-DPI
+   transform, so the interface drew at 2x while the world drew at 1x, leaving a wide band of clear
+   colour between the terrain and the inspector. The display's backing scale is now folded into the
+   camera, and pointer, pan and zoom conversions go through it. This had been wrong for the whole
+   project.
+2. **The camera could zoom out past the world.** There is now a minimum zoom derived from the
+   viewport, so the diorama never floats on the background.
+3. **The inspector panel was drawn at alpha 248**, so the world bled through and drew a seam along
+   its own right edge. It is opaque now.
+4. **Ants walked through open sky.** Sky is passable, so foragers flew over the ground instead of
+   walking on it. Navigation now uses `Grid::walkable`, and food sources sit on the ground rather
+   than a cell above it.
+5. **Ants ping-ponged on the spot.** A worker whose next path cell was directly above or below
+   spent its whole tick overshooting the target column and stepping back, forever. About a fifth of
+   workers were stuck this way, and they counted as productive while doing it.
+
+Also: grass grows on the real surface height so it sits on the spoil mound rather than inside it;
+the selection inspector is back, filling the panel's empty lower half; Work, winged queens and
+Legacy appear in the header once they mean something; and the ant detail threshold was retuned
+because the DPI fix doubled apparent size, so ants now show legs and antennae at the default zoom.
 
 ### M5 in progress — T015 performance and the spoil mound
 

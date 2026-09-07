@@ -39,6 +39,22 @@ void Grid::set(const GridPos position, const Material material) {
   }
 }
 
+bool Grid::walkable(const GridPos position) const {
+  if (!in_bounds(position)) return false;
+  const Material material = cells_[index(position)];
+  if (!is_passable(material)) return false;
+  if (material != Material::Sky) return true;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      if (dx == 0 && dy == 0) continue;
+      const GridPos neighbour{position.x + dx, position.y + dy};
+      if (!in_bounds(neighbour)) continue;
+      if (!is_passable(cells_[index(neighbour)])) return true;
+    }
+  }
+  return false;
+}
+
 std::uint64_t Grid::terrain_revision() const {
   std::uint64_t total = 0;
   for (const std::uint64_t revision : chunk_revisions_) total += revision;

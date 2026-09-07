@@ -28,8 +28,8 @@ int heuristic(const GridPos a, const GridPos b) {
 } // namespace
 
 void HomeField::rebuild(const Grid& grid, const GridPos home) {
-  if (!grid.passable(home)) {
-    throw std::invalid_argument("home field origin must be passable");
+  if (!grid.walkable(home)) {
+    throw std::invalid_argument("home field origin must be walkable");
   }
   distances_.assign(static_cast<std::size_t>(Grid::kWidth * Grid::kHeight), -1);
   home_ = home;
@@ -44,7 +44,7 @@ void HomeField::rebuild(const Grid& grid, const GridPos home) {
     const int next_distance = distances_[index_of(current)] + 1;
     for (const GridPos offset : kNeighbors) {
       const GridPos neighbor{current.x + offset.x, current.y + offset.y};
-      if (!grid.passable(neighbor) || distances_[index_of(neighbor)] >= 0) {
+      if (!grid.walkable(neighbor) || distances_[index_of(neighbor)] >= 0) {
         continue;
       }
       distances_[index_of(neighbor)] = next_distance;
@@ -88,7 +88,7 @@ std::vector<GridPos> HomeField::path_home(const Grid& grid, const GridPos start)
 
 PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
                      const std::size_t expansion_budget) {
-  if (!grid.passable(start) || !grid.passable(goal)) {
+  if (!grid.walkable(start) || !grid.walkable(goal)) {
     return {};
   }
   if (start == goal) {
@@ -147,7 +147,7 @@ PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
     const GridPos current = position_of(node.index);
     for (const GridPos offset : kNeighbors) {
       const GridPos neighbor{current.x + offset.x, current.y + offset.y};
-      if (!grid.passable(neighbor)) {
+      if (!grid.walkable(neighbor)) {
         continue;
       }
       const std::size_t neighbor_index = index_of(neighbor);

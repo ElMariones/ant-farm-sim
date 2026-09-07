@@ -30,7 +30,8 @@ struct Options {
   int width{1440};
   int height{900};
   ant::sim::Tick fast_forward{};
-  float zoom{3.0F};
+  // Opens close enough that ants read as ants rather than specks.
+  float zoom{5.0F};
   std::optional<std::string> screenshot;
   int screenshot_delay_frames{12};
   int target_fps{60};
@@ -456,6 +457,19 @@ int main(const int argc, char** argv) {
       renderer.draw(view, accumulator / 0.05, paused, speed, simulation_limited);
       EndDrawing();
 
+      if (options.display_metrics && rendered_frames == 20) {
+        const Rectangle vp = renderer.debug_viewport();
+        const Vector2 target = renderer.debug_target();
+        const Vector2 offset = renderer.debug_offset();
+        std::cout << "viewport=" << vp.x << ',' << vp.y << ' ' << vp.width << 'x' << vp.height
+                  << " target=" << target.x << ',' << target.y << " offset=" << offset.x << ','
+                  << offset.y << " screen=" << GetScreenWidth() << 'x' << GetScreenHeight()
+                  << " zoom=" << renderer.debug_zoom();
+        const Vector2 origin = renderer.debug_world_to_screen({0.0F, 0.0F});
+        const Vector2 far = renderer.debug_world_to_screen({384.0F, 216.0F});
+        std::cout << " world(0,0)->" << origin.x << ',' << origin.y << " world(384,216)->" << far.x
+                  << ',' << far.y << '\n';
+      }
       ++rendered_frames;
       if (options.screenshot.has_value() && !screenshot_taken &&
           rendered_frames >= options.screenshot_delay_frames) {

@@ -287,12 +287,27 @@ void World::refresh_path(const entt::entity e, int& path_budget) {
 }
 
 bool World::move_one_tick(const entt::entity e) {
-  Movement& m = registry_.get<Movement>(e); Position& p = registry_.get<Position>(e); if (m.next_cell >= m.path.size()) return true; const GridPos next = m.path[m.next_cell]; if (!grid_.passable(next)) return false;
+  Movement& m = registry_.get<Movement>(e); Position& p = registry_.get<Position>(e); if (m.next_cell >= m.path.size()) return true; const GridPos next = m.path[m.next_cell]; if (!grid_.walkable(next)) return false;
   const std::int32_t before_x = p.x_subcells;
   const std::int32_t before_y = p.y_subcells;
   m.speed_residual += 6 * kSubcellsPerCell * (traits_.industry_tier >= 2 ? 110 : 100) / 100; const int travel = m.speed_residual / kTicksPerSecond; m.speed_residual %= kTicksPerSecond;
-  const std::int32_t tx = cell_center(next.x), ty = cell_center(next.y), dx = tx - p.x_subcells, dy = ty - p.y_subcells; const int distance = std::abs(dx) + std::abs(dy);
-  if (distance <= travel) { p.x_subcells = tx; p.y_subcells = ty; ++m.next_cell; } else if (dx != 0) p.x_subcells += dx > 0 ? travel : -travel; else p.y_subcells += dy > 0 ? travel : -travel;
+  const std::int32_t tx = cell_center(next.x), ty = cell_center(next.y);
+  const std::int32_t dx = tx - p.x_subcells, dy = ty - p.y_subcells;
+  // Spend the tick's travel along x first, then any remainder along y, never stepping past the
+  // target on either axis. A fixed-size step used to overshoot the target column and the ant would
+  // ping-pong across it forever without ever closing the distance in y.
+  std::int32_t remaining = travel;
+  if (dx != 0) {
+    const std::int32_t step = std::min(remaining, std::abs(dx));
+    p.x_subcells += dx > 0 ? step : -step;
+    remaining -= step;
+  }
+  if (remaining > 0 && dy != 0) {
+    const std::int32_t step = std::min(remaining, std::abs(dy));
+    p.y_subcells += dy > 0 ? step : -step;
+    remaining -= step;
+  }
+  if (p.x_subcells == tx && p.y_subcells == ty) ++m.next_cell;
   if (p.x_subcells != before_x || p.y_subcells != before_y) ++stats_.productive_worker_ticks;
   return m.next_cell >= m.path.size();
 }
@@ -334,7 +349,7 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
     }
   }
   if (!mind.has_target) return; const GridPos current = registry_.get<Position>(e).cell(); GridPos work = current; bool adjacent = false;
-  for (const GridPos d : kNeighbors) { const GridPos candidate{mind.target.x + d.x, mind.target.y + d.y}; if (grid_.passable(candidate)) { work = candidate; adjacent = candidate == current; if (adjacent) break; } }
+  for (const GridPos d : kNeighbors) { const GridPos candidate{mind.target.x + d.x, mind.target.y + d.y}; if (grid_.walkable(candidate)) { work = candidate; adjacent = candidate == current; if (adjacent) break; } }
   if (!adjacent) { route_to(e, work, path_budget); return; } if (++mind.action_ticks < 10) return; mind.action_ticks = 0; std::uint16_t& remaining = dig_work_[grid_index(mind.target)]; if (remaining == 0) remaining = grid_.at(mind.target) == Material::Clay ? 2'500 : 1'000;
   const std::uint16_t dig_amount = static_cast<std::uint16_t>(
       (100 + 25 * adaptation_levels_[0]) * (traits_.industry_tier >= 1 ? 115 : 100) / 100);
@@ -452,10 +467,12 @@ bool World::deposit_spoil() {
   // entrance is real terrain the colony built rather than a drawn-on decoration. Grains settle on
   // the lowest nearby pile, which grows a cone outward instead of a tower.
   constexpr int kFirstColumn = 2;   // leaves the entrance shaft and its shoulders clear
-  constexpr int kLastColumn = 30;
-  // A spoil apron is low and broad. Left uncapped it grows into walls either side of the entrance
-  // that every forager has to climb, which taxes the colony far more than a real ant hill does.
-  constexpr int kMaxPile = 5;
+  constexpr int kLastColumn = 44;
+  // The apron is a cone: tallest beside the entrance and tapering to nothing at the rim, so a
+  // forager walks up a slope instead of over a wall. A flat cap instead of a profile made the
+  // spoil saturate into a plateau once the colony started digging in earnest.
+  constexpr int kPeak = 6;
+  constexpr int kColumnsPerStep = 6;
   int best_score = 0;
   bool found = false;
   GridPos best{};
@@ -465,7 +482,8 @@ bool World::deposit_spoil() {
       if (column < 0 || column >= Grid::kWidth) continue;
       int height = 0;
       while (height < 32 && !is_passable(grid_.at({column, 31 - height}))) ++height;
-      if (height >= kMaxPile) continue;
+      const int allowed = kPeak - (radius - kFirstColumn) / kColumnsPerStep;
+      if (allowed <= 0 || height >= allowed) continue;
       const GridPos target{column, 31 - height};
       if (grid_.at(target) != Material::Sky) continue;
       if (cell_is_occupied(target)) continue;

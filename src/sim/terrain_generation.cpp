@@ -27,7 +27,7 @@ GeneratedTerrain generate_terrain(const std::uint64_t seed) {
 
   const int source_a_x = 54 + static_cast<int>(mix_seed(seed ^ 0xA11CEULL) % 72ULL);
   const int source_b_x = 258 + static_cast<int>(mix_seed(seed ^ 0xBEEFULL) % 72ULL);
-  generated.source_positions = {{{source_a_x, 30}, {source_b_x, 30}}};
+  generated.source_positions = {{{source_a_x, 31}, {source_b_x, 31}}};
 
   for (int y = 31; y <= 58; ++y) {
     const int half_width = y < 46 ? 1 : 2;

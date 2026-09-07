@@ -145,3 +145,22 @@ committed, which made the tick cost quadratic in population and timed the sixty-
 CI. Claims are now tallied once per tick and adjusted as workers take and give up targets — on a
 new target, on finishing a cell, and on switching task. Missing any of those releases leaves
 phantom claims that push excavators off frontiers and measurably slows the colony.
+
+
+## Ants walk on surfaces (M5)
+
+`Grid::walkable` is what navigation and movement use; `Grid::passable` only says a cell is not
+solid. An enclosed cell (tunnel air) is always walkable. Open sky is walkable only when one of its
+eight neighbours is solid, so ants follow the ground contour and the spoil mound instead of
+striding through mid-air. Diagonal support is deliberate: with four-way movement, requiring support
+directly below would make a one-cell step in the mound impossible to climb.
+
+Food sources sit on row 31, the last open row above the ground, rather than hovering a cell higher
+where nothing can stand.
+
+## Movement spends a tick's travel along both axes (M5)
+
+A tick's travel is spent along x first and any remainder along y, never stepping past the target on
+either axis. Stepping a fixed distance on one axis at a time overshot the target column and the ant
+ping-ponged across it forever without ever closing the distance in y. About a fifth of workers were
+stuck this way, and because they moved every tick they counted as productive while doing no work.
