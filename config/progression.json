@@ -1,0 +1,15 @@
+{
+  "content_version": "m3-v1",
+  "productive_ticks_per_work": 1200,
+  "focus_cooldown_ticks": 200,
+  "upgrades": [
+    {"id": "excavation", "name": "Strong Mandibles", "effect_percent_per_level": 25,
+     "costs": [15, 24, 39, 62, 99, 158, 252, 403, 645, 1031]},
+    {"id": "nursing", "name": "Nursery Rhythm", "effect_percent_per_level": 10,
+     "costs": [15, 24, 39, 62, 99, 158, 252, 403, 645, 1031]},
+    {"id": "foraging", "name": "Efficient Trails", "effect_percent_per_level": 20,
+     "costs": [15, 24, 39, 62, 99, 158, 252, 403, 645, 1031]},
+    {"id": "queen", "name": "Queen Vitality", "effect_percent_per_level": 15,
+     "costs": [15, 24, 39, 62, 99, 158, 252, 403, 645, 1031]}
+  ]
+}

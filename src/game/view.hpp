@@ -8,6 +8,8 @@
 
 namespace ant::game {
 
+enum class Bottleneck : std::uint8_t { None, Nutrition, Nursing, NurserySpace, QueenOutput, Labor };
+
 struct GameView {
   std::uint64_t seed{};
   sim::Tick tick{};
@@ -32,8 +34,15 @@ struct GameView {
   bool extinct{};
   sim::Focus focus{sim::Focus::Balanced};
   bool focus_available{};
+  sim::Tick focus_cooldown_remaining{};
+  std::int64_t work{};
+  std::uint64_t productive_tick_remainder{};
+  std::array<std::uint8_t, 4> upgrade_levels{};
+  std::array<std::int64_t, 4> upgrade_costs{};
+  Bottleneck bottleneck{Bottleneck::None};
 };
 
 [[nodiscard]] GameView make_view(const Session& session);
+[[nodiscard]] const char* bottleneck_name(Bottleneck bottleneck);
 
 } // namespace ant::game

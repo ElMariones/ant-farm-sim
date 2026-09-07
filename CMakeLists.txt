@@ -46,6 +46,7 @@ target_link_libraries(ant_sim PUBLIC EnTT::EnTT)
 ant_configure_target(ant_sim)
 
 add_library(ant_game
+  src/game/progression.cpp
   src/game/session.cpp
   src/game/view.cpp
 )
@@ -53,13 +54,20 @@ target_include_directories(ant_game PUBLIC src)
 target_link_libraries(ant_game PUBLIC ant_sim)
 ant_configure_target(ant_game)
 
-add_library(ant_persistence src/persistence/profile_format.cpp)
+add_library(ant_persistence
+  src/persistence/content_loader.cpp
+  src/persistence/profile_codec.cpp
+  src/persistence/profile_format.cpp
+  src/persistence/platform_paths.cpp
+  src/persistence/save_service.cpp
+)
 target_include_directories(ant_persistence PUBLIC src)
 target_link_libraries(ant_persistence PUBLIC ant_game nlohmann_json::nlohmann_json)
 ant_configure_target(ant_persistence)
 
 add_executable(ant_headless src/headless/main.cpp)
 target_link_libraries(ant_headless PRIVATE ant_game ant_persistence)
+target_compile_definitions(ant_headless PRIVATE ANT_SOURCE_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
 ant_configure_target(ant_headless)
 
 if(ANT_BUILD_DESKTOP)
@@ -76,9 +84,11 @@ if(ANT_BUILD_DESKTOP)
 
   add_executable(ant_farm
     src/app/main.cpp
+    src/app/save_coordinator.cpp
     src/app/window_size.cpp
   )
   target_link_libraries(ant_farm PRIVATE ant_presentation ant_persistence)
+  target_compile_definitions(ant_farm PRIVATE ANT_SOURCE_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
   if(APPLE)
     target_sources(ant_farm PRIVATE src/app/macos_window.mm)
     target_link_libraries(ant_farm PRIVATE "-framework AppKit")
@@ -92,21 +102,32 @@ if(ANT_BUILD_DESKTOP)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/OFL.txt"
       "$<TARGET_FILE_DIR:ant_farm>/assets/fonts/OFL.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:ant_farm>/config"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/config/progression.json"
+      "$<TARGET_FILE_DIR:ant_farm>/config/progression.json"
     VERBATIM
   )
 endif()
 
 if(BUILD_TESTING)
   add_executable(ant_tests
+    src/app/save_coordinator.cpp
     src/app/window_size.cpp
     tests/unit/grid_tests.cpp
     tests/unit/navigation_tests.cpp
+    tests/unit/progression_tests.cpp
     tests/unit/rng_tests.cpp
+    tests/unit/save_coordinator_tests.cpp
+    tests/unit/save_service_tests.cpp
+    tests/unit/snapshot_tests.cpp
     tests/unit/task_system_tests.cpp
     tests/unit/window_size_tests.cpp
     tests/unit/world_tests.cpp
   )
-  target_link_libraries(ant_tests PRIVATE ant_game Catch2::Catch2WithMain)
+  target_link_libraries(ant_tests PRIVATE ant_game ant_persistence Catch2::Catch2WithMain)
+  target_compile_definitions(ant_tests PRIVATE
+    ANT_SOURCE_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
   ant_configure_target(ant_tests)
 
   include(Catch)

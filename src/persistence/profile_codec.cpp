@@ -1,0 +1,234 @@
+#include "persistence/profile_codec.hpp"
+
+#include "game/session.hpp"
+
+#include <algorithm>
+#include <array>
+#include <iomanip>
+#include <limits>
+#include <nlohmann/json.hpp>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+
+namespace ant::persistence {
+namespace {
+using json = nlohmann::json;
+
+template <typename Enum>
+int enum_value(const Enum value) { return static_cast<int>(value); }
+
+template <typename Enum>
+Enum read_enum(const json& value, const int maximum, const char* name) {
+  const int raw = value.get<int>();
+  if (raw < 0 || raw > maximum) throw std::invalid_argument(std::string(name) + " is outside its legal range");
+  return static_cast<Enum>(raw);
+}
+
+json position_json(const sim::GridPos p) { return json::array({p.x, p.y}); }
+sim::GridPos read_position(const json& value) {
+  if (!value.is_array() || value.size() != 2) throw std::invalid_argument("grid position must have two coordinates");
+  return {value[0].get<int>(), value[1].get<int>()};
+}
+
+json progression_json(const game::ProgressionConfig& config) {
+  json upgrades = json::array();
+  for (const auto& definition : config.upgrades) {
+    upgrades.push_back({{"id", game::upgrade_id_name(definition.id)}, {"name", definition.name},
+                        {"effect_percent_per_level", definition.effect_percent_per_level}, {"costs", definition.costs}});
+  }
+  return {{"content_version", config.content_version}, {"productive_ticks_per_work", config.productive_ticks_per_work},
+          {"focus_cooldown_ticks", config.focus_cooldown_ticks}, {"upgrades", std::move(upgrades)}};
+}
+
+game::UpgradeId read_upgrade_id(const std::string& value) {
+  if (value == "excavation") return game::UpgradeId::Excavation;
+  if (value == "nursing") return game::UpgradeId::Nursing;
+  if (value == "foraging") return game::UpgradeId::Foraging;
+  if (value == "queen") return game::UpgradeId::Queen;
+  throw std::invalid_argument("unknown embedded upgrade id");
+}
+
+game::ProgressionConfig read_progression(const json& value) {
+  game::ProgressionConfig config;
+  config.content_version = value.at("content_version").get<std::string>();
+  config.productive_ticks_per_work = value.at("productive_ticks_per_work").get<std::uint64_t>();
+  config.focus_cooldown_ticks = value.at("focus_cooldown_ticks").get<sim::Tick>();
+  const auto& upgrades = value.at("upgrades");
+  if (!upgrades.is_array() || upgrades.size() != 4) throw std::invalid_argument("embedded progression requires four upgrades");
+  std::array<bool, 4> seen{};
+  for (const auto& item : upgrades) {
+    game::UpgradeDefinition definition;
+    definition.id = read_upgrade_id(item.at("id").get<std::string>());
+    const std::size_t index = game::upgrade_index(definition.id);
+    if (seen[index]) throw std::invalid_argument("duplicate embedded upgrade");
+    seen[index] = true;
+    definition.name = item.at("name").get<std::string>();
+    definition.effect_percent_per_level = item.at("effect_percent_per_level").get<int>();
+    definition.costs = item.at("costs").get<std::array<std::int64_t, 10>>();
+    config.upgrades[index] = std::move(definition);
+  }
+  std::string error;
+  if (!game::validate_progression(config, error)) throw std::invalid_argument(error);
+  return config;
+}
+
+json stats_json(const sim::WorldStats& s) {
+  return {{"path_requests", s.path_requests}, {"path_expansions", s.path_expansions},
+          {"navigation_replans", s.navigation_replans}, {"picked_up", s.picked_up},
+          {"delivered", s.delivered}, {"external_refill", s.external_refill},
+          {"completed_round_trips", s.completed_round_trips}, {"cells_excavated", s.cells_excavated},
+          {"spoil_delivered", s.spoil_delivered}, {"eggs_laid", s.eggs_laid},
+          {"workers_born", s.workers_born}, {"deaths", s.deaths}, {"corpses_cleaned", s.corpses_cleaned},
+          {"consumed_carbohydrate", s.consumed_carbohydrate}, {"consumed_protein", s.consumed_protein},
+          {"decayed_food", s.decayed_food}, {"productive_worker_ticks", s.productive_worker_ticks}};
+}
+
+sim::WorldStats read_stats(const json& j) {
+  sim::WorldStats s;
+  s.path_requests=j.at("path_requests").get<std::uint64_t>(); s.path_expansions=j.at("path_expansions").get<std::uint64_t>();
+  s.navigation_replans=j.at("navigation_replans").get<std::uint64_t>(); s.picked_up=j.at("picked_up").get<std::int64_t>();
+  s.delivered=j.at("delivered").get<std::int64_t>(); s.external_refill=j.at("external_refill").get<std::int64_t>();
+  s.completed_round_trips=j.at("completed_round_trips").get<std::uint64_t>(); s.cells_excavated=j.at("cells_excavated").get<std::uint64_t>();
+  s.spoil_delivered=j.at("spoil_delivered").get<std::uint64_t>(); s.eggs_laid=j.at("eggs_laid").get<std::uint64_t>();
+  s.workers_born=j.at("workers_born").get<std::uint64_t>(); s.deaths=j.at("deaths").get<std::uint64_t>();
+  s.corpses_cleaned=j.at("corpses_cleaned").get<std::uint64_t>(); s.consumed_carbohydrate=j.at("consumed_carbohydrate").get<std::int64_t>();
+  s.consumed_protein=j.at("consumed_protein").get<std::int64_t>(); s.decayed_food=j.at("decayed_food").get<std::int64_t>();
+  s.productive_worker_ticks=j.at("productive_worker_ticks").get<std::uint64_t>();
+  return s;
+}
+
+json source_json(const sim::FoodSource& s) {
+  return {{"id",s.id},{"position",position_json(s.position)},{"nutrient",enum_value(s.nutrient)},
+          {"amount",s.amount},{"capacity",s.capacity},{"reserved",s.reserved},{"refill_amount",s.refill_amount},
+          {"refill_interval",s.refill_interval},{"next_refill",s.next_refill}};
+}
+sim::FoodSource read_source(const json& j) {
+  return {j.at("id").get<sim::EntityId>(),read_position(j.at("position")),read_enum<sim::Nutrient>(j.at("nutrient"),1,"nutrient"),
+          j.at("amount").get<std::int64_t>(),j.at("capacity").get<std::int64_t>(),j.at("reserved").get<std::int64_t>(),
+          j.at("refill_amount").get<std::int64_t>(),j.at("refill_interval").get<sim::Tick>(),j.at("next_refill").get<sim::Tick>()};
+}
+
+json actor_json(const sim::ActorState& a) {
+  json result={{"id",a.identity.id},{"kind",enum_value(a.ant.kind)},{"worker",a.worker},
+    {"position",{{"x",a.position.x_subcells},{"y",a.position.y_subcells},{"previous_x",a.position.previous_x_subcells},{"previous_y",a.position.previous_y_subcells}}},
+    {"cargo",{{"kind",enum_value(a.cargo.kind)},{"nutrient",enum_value(a.cargo.nutrient)},{"amount",a.cargo.amount},{"entity_id",a.cargo.entity_id}}}};
+  if (a.worker) {
+    json path=json::array(); for (const auto p:a.movement.path) path.push_back(position_json(p));
+    result["movement"]={{"path",std::move(path)},{"next_cell",a.movement.next_cell},{"path_revision",a.movement.path_revision},{"speed_residual",a.movement.speed_residual}};
+    result["forager"]={{"state",enum_value(a.forager.state)},{"source_index",a.forager.source_index},{"reserved_amount",a.forager.reserved_amount},{"reservation_expiry",a.forager.reservation_expiry},{"retry_after",a.forager.retry_after}};
+    result["mind"]={{"task",enum_value(a.mind.task)},{"committed_until",a.mind.committed_until},{"thresholds",a.mind.thresholds},{"target",position_json(a.mind.target)},{"has_target",a.mind.has_target},{"action_ticks",a.mind.action_ticks}};
+    result["life"]={{"age",a.life.age},{"lifespan",a.life.lifespan},{"starvation",a.life.starvation}};
+  }
+  return result;
+}
+
+sim::ActorState read_actor(const json& j) {
+  sim::ActorState a;
+  a.identity.id=j.at("id").get<sim::EntityId>(); a.ant.kind=read_enum<sim::AntKind>(j.at("kind"),1,"ant kind"); a.worker=j.at("worker").get<bool>();
+  const auto& p=j.at("position"); a.position={p.at("x").get<std::int32_t>(),p.at("y").get<std::int32_t>(),p.at("previous_x").get<std::int32_t>(),p.at("previous_y").get<std::int32_t>()};
+  const auto& c=j.at("cargo"); a.cargo={read_enum<sim::CargoKind>(c.at("kind"),3,"cargo kind"),read_enum<sim::Nutrient>(c.at("nutrient"),1,"cargo nutrient"),c.at("amount").get<std::int64_t>(),c.at("entity_id").get<sim::EntityId>()};
+  if (a.worker) {
+    const auto& m=j.at("movement"); for(const auto& item:m.at("path")) a.movement.path.push_back(read_position(item)); a.movement.next_cell=m.at("next_cell").get<std::size_t>(); a.movement.path_revision=m.at("path_revision").get<std::uint64_t>(); a.movement.speed_residual=m.at("speed_residual").get<int>();
+    const auto& f=j.at("forager"); a.forager={read_enum<sim::ForageState>(f.at("state"),3,"forage state"),f.at("source_index").get<int>(),f.at("reserved_amount").get<std::int64_t>(),f.at("reservation_expiry").get<sim::Tick>(),f.at("retry_after").get<sim::Tick>()};
+    const auto& mind=j.at("mind"); a.mind.task=read_enum<sim::Task>(mind.at("task"),4,"task"); a.mind.committed_until=mind.at("committed_until").get<sim::Tick>(); a.mind.thresholds=mind.at("thresholds").get<std::array<std::uint16_t,4>>(); a.mind.target=read_position(mind.at("target")); a.mind.has_target=mind.at("has_target").get<bool>(); a.mind.action_ticks=mind.at("action_ticks").get<int>();
+    const auto& life=j.at("life"); a.life={life.at("age").get<sim::Tick>(),life.at("lifespan").get<sim::Tick>(),life.at("starvation").get<sim::Tick>()};
+  }
+  return a;
+}
+
+json world_json(const sim::WorldSnapshot& w) {
+  json terrain=json::array(); for(const auto value:w.terrain) terrain.push_back(enum_value(value));
+  json sources=json::array(); for(const auto& source:w.sources) sources.push_back(source_json(source));
+  json brood=json::array(); for(const auto& b:w.brood) brood.push_back({{"id",b.id},{"stage",enum_value(b.stage)},{"position",position_json(b.position)},{"progress",b.progress},{"target",b.target},{"care_remaining",b.care_remaining},{"starvation",b.starvation}});
+  json corpses=json::array(); for(const auto& c:w.corpses) corpses.push_back({{"id",c.id},{"position",position_json(c.position)},{"age",c.age},{"cleanable",c.cleanable}});
+  json dropped=json::array(); for(const auto& d:w.dropped_food) dropped.push_back({{"id",d.id},{"position",position_json(d.position)},{"nutrient",enum_value(d.nutrient)},{"amount",d.amount},{"age",d.age}});
+  json actors=json::array(); for(const auto& a:w.actors) actors.push_back(actor_json(a));
+  json frontiers=json::array(); for(const auto p:w.frontiers) frontiers.push_back(position_json(p));
+  return {{"seed",w.seed},{"tick",w.tick},{"next_id",w.next_id},{"home",position_json(w.home)},
+    {"terrain",std::move(terrain)},{"sources",std::move(sources)},
+    {"stores",{{"carbohydrate",w.stores.carbohydrate},{"protein",w.stores.protein},{"carbohydrate_capacity",w.stores.carbohydrate_capacity},{"protein_capacity",w.stores.protein_capacity}}},
+    {"stats",stats_json(w.stats)},
+    {"rng",{{"behavior_state",w.behavior_rng_state},{"behavior_increment",w.behavior_rng_increment},{"lifecycle_state",w.lifecycle_rng_state},{"lifecycle_increment",w.lifecycle_rng_increment}}},
+    {"trails",w.trails},{"dig_work",w.dig_work},
+    {"task_diagnostics",{{"stimuli",w.task_diagnostics.stimuli},{"workers_by_task",w.task_diagnostics.workers_by_task}}},
+    {"frontiers",std::move(frontiers)},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"actors",std::move(actors)},
+    {"spoil_mound",w.spoil_mound},{"starting_nest_air",w.starting_nest_air},{"connected_nest_air",w.connected_nest_air},{"nursery_capacity",w.nursery_capacity},
+    {"next_laying",w.next_laying},{"queen_starvation",w.queen_starvation},{"queen_alive",w.queen_alive},{"decline",w.decline},{"extinct",w.extinct},
+    {"focus",enum_value(w.focus)},{"adaptation_levels",w.adaptation_levels}};
+}
+
+sim::WorldSnapshot read_world(const json& j) {
+  sim::WorldSnapshot w; w.seed=j.at("seed").get<std::uint64_t>(); w.tick=j.at("tick").get<sim::Tick>(); w.next_id=j.at("next_id").get<sim::EntityId>(); w.home=read_position(j.at("home"));
+  const auto& terrain=j.at("terrain"); if(!terrain.is_array()||terrain.size()!=static_cast<std::size_t>(sim::Grid::kWidth*sim::Grid::kHeight)) throw std::invalid_argument("terrain array has wrong size"); w.terrain.reserve(terrain.size()); for(const auto& item:terrain) w.terrain.push_back(read_enum<sim::Material>(item,5,"material"));
+  const auto& sources=j.at("sources"); if(!sources.is_array()||sources.size()!=2) throw std::invalid_argument("two food sources required"); for(std::size_t i=0;i<2;++i) w.sources[i]=read_source(sources[i]);
+  const auto& stores=j.at("stores"); w.stores={stores.at("carbohydrate").get<std::int64_t>(),stores.at("protein").get<std::int64_t>(),stores.at("carbohydrate_capacity").get<std::int64_t>(),stores.at("protein_capacity").get<std::int64_t>()};
+  w.stats=read_stats(j.at("stats")); const auto& rng=j.at("rng"); w.behavior_rng_state=rng.at("behavior_state").get<std::uint64_t>(); w.behavior_rng_increment=rng.at("behavior_increment").get<std::uint64_t>(); w.lifecycle_rng_state=rng.at("lifecycle_state").get<std::uint64_t>(); w.lifecycle_rng_increment=rng.at("lifecycle_increment").get<std::uint64_t>();
+  w.trails=j.at("trails").get<std::vector<std::uint16_t>>(); w.dig_work=j.at("dig_work").get<std::vector<std::uint16_t>>();
+  const auto& td=j.at("task_diagnostics"); w.task_diagnostics.stimuli=td.at("stimuli").get<std::array<std::uint16_t,4>>(); w.task_diagnostics.workers_by_task=td.at("workers_by_task").get<std::array<std::uint32_t,5>>();
+  for(const auto& item:j.at("frontiers")) w.frontiers.push_back(read_position(item));
+  for(const auto& item:j.at("brood")) w.brood.push_back({item.at("id").get<sim::EntityId>(),read_enum<sim::BroodStage>(item.at("stage"),2,"brood stage"),read_position(item.at("position")),item.at("progress").get<sim::Tick>(),item.at("target").get<sim::Tick>(),item.at("care_remaining").get<sim::Tick>(),item.at("starvation").get<sim::Tick>()});
+  for(const auto& item:j.at("corpses")) w.corpses.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),item.at("age").get<sim::Tick>(),item.at("cleanable").get<bool>()});
+  for(const auto& item:j.at("dropped_food")) w.dropped_food.push_back({item.at("id").get<sim::EntityId>(),read_position(item.at("position")),read_enum<sim::Nutrient>(item.at("nutrient"),1,"nutrient"),item.at("amount").get<std::int64_t>(),item.at("age").get<sim::Tick>()});
+  for(const auto& item:j.at("actors")) w.actors.push_back(read_actor(item));
+  w.spoil_mound=j.at("spoil_mound").get<std::uint64_t>(); w.starting_nest_air=j.at("starting_nest_air").get<int>(); w.connected_nest_air=j.at("connected_nest_air").get<int>(); w.nursery_capacity=j.at("nursery_capacity").get<int>();
+  w.next_laying=j.at("next_laying").get<sim::Tick>(); w.queen_starvation=j.at("queen_starvation").get<sim::Tick>(); w.queen_alive=j.at("queen_alive").get<bool>(); w.decline=j.at("decline").get<bool>(); w.extinct=j.at("extinct").get<bool>(); w.focus=read_enum<sim::Focus>(j.at("focus"),3,"focus"); w.adaptation_levels=j.at("adaptation_levels").get<std::array<std::uint8_t,4>>();
+  return w;
+}
+
+void validate_world(const sim::WorldSnapshot& w) {
+  constexpr std::size_t cells=static_cast<std::size_t>(sim::Grid::kWidth*sim::Grid::kHeight);
+  if(w.trails.size()!=cells||w.dig_work.size()!=cells) throw std::invalid_argument("field array has wrong size");
+  if(w.actors.size()+w.brood.size()+w.corpses.size()+w.dropped_food.size()>20'000||w.brood.size()>5'000) throw std::invalid_argument("entity limit exceeded");
+  if(!sim::Grid().in_bounds(w.home)||w.starting_nest_air<=0||w.connected_nest_air<w.starting_nest_air||w.nursery_capacity<12) throw std::invalid_argument("invalid nest dimensions");
+  std::set<sim::EntityId> ids; sim::EntityId maximum=0; auto add=[&](sim::EntityId id){if(id==0||!ids.insert(id).second) throw std::invalid_argument("duplicate or zero entity id"); maximum=std::max(maximum,id);};
+  std::array<std::int64_t,2> reservations{};
+  for(const auto& source:w.sources){add(source.id); if(source.amount<0||source.capacity<=0||source.amount>source.capacity||source.reserved<0||source.reserved>source.amount||source.refill_amount<0||source.refill_interval==0) throw std::invalid_argument("invalid food source");}
+  auto passable=[&](sim::GridPos p){return p.x>=0&&p.x<sim::Grid::kWidth&&p.y>=0&&p.y<sim::Grid::kHeight&&sim::is_passable(w.terrain[static_cast<std::size_t>(p.y*sim::Grid::kWidth+p.x)]);};
+  bool queen=false; sim::EntityId previous=0;
+  for(const auto& actor:w.actors){add(actor.identity.id); if(actor.identity.id<=previous) throw std::invalid_argument("actors are not in stable id order"); previous=actor.identity.id; if(!passable(actor.position.cell())||actor.cargo.amount<0||actor.worker!=(actor.ant.kind==sim::AntKind::Worker)) throw std::invalid_argument("invalid actor state"); if(!actor.worker){if(queen) throw std::invalid_argument("multiple queens");queen=true;continue;} if(actor.movement.next_cell>actor.movement.path.size()||actor.movement.path.size()>cells||actor.movement.speed_residual<0||actor.movement.speed_residual>=sim::kTicksPerSecond) throw std::invalid_argument("invalid movement state"); for(const auto p:actor.movement.path) if(!passable(p)) throw std::invalid_argument("path crosses an impassable cell"); if(actor.forager.source_index<-1||actor.forager.source_index>1||actor.forager.reserved_amount<0) throw std::invalid_argument("invalid reservation"); if(actor.forager.source_index>=0) reservations[static_cast<std::size_t>(actor.forager.source_index)]+=actor.forager.reserved_amount;}
+  if(queen!=w.queen_alive) throw std::invalid_argument("queen state mismatch");
+  for(std::size_t i=0;i<2;++i) if(reservations[i]!=w.sources[i].reserved) throw std::invalid_argument("source reservation mismatch");
+  for(const auto& b:w.brood){add(b.id);if(!passable(b.position)||b.target==0||b.progress>b.target) throw std::invalid_argument("invalid brood state");}
+  for(const auto& c:w.corpses){add(c.id);if(!passable(c.position)) throw std::invalid_argument("invalid corpse position");}
+  for(const auto& d:w.dropped_food){add(d.id);if(!passable(d.position)||d.amount<=0) throw std::invalid_argument("invalid dropped cargo");}
+  if(w.next_id<=maximum) throw std::invalid_argument("next entity id is not monotonic");
+  static_cast<void>(sim::World(w));
+}
+
+json profile_json(const game::ProfileSnapshot& p) {
+  json run=nullptr;
+  if(p.run){const auto& r=*p.run;run={{"run_id",r.run_id},{"embedded_progression",progression_json(r.embedded_progression)},{"work",r.work},{"productive_tick_remainder",r.productive_tick_remainder},{"accounted_productive_ticks",r.accounted_productive_ticks},{"upgrade_levels",r.upgrade_levels},{"next_focus_change_tick",r.next_focus_change_tick},{"assisted",r.assisted},{"world",world_json(r.world)}};}
+  return {{"schema_version",p.schema_version},{"revision",p.revision},{"content_version",p.content_version},{"profile_id",p.profile_id},{"phase",p.phase==game::ProfilePhase::ActiveRun?"ActiveRun":"BetweenRuns"},
+    {"meta",{{"legacy_wallet",p.meta.legacy_wallet},{"legacy_earned_total",p.meta.legacy_earned_total},{"legacy_spent_total",p.meta.legacy_spent_total},{"vigor_tier",p.meta.vigor_tier},{"industry_tier",p.meta.industry_tier},{"generation",p.meta.generation},{"successful_flights",p.meta.successful_flights}}},
+    {"settings",{{"ui_scale_percent",p.settings.ui_scale_percent},{"reduced_motion",p.settings.reduced_motion},{"preferred_speed",p.settings.preferred_speed}}},{"run",std::move(run)}};
+}
+
+game::ProfileSnapshot read_profile(const json& j) {
+  game::ProfileSnapshot p; p.schema_version=j.at("schema_version").get<std::uint32_t>(); if(p.schema_version!=1) throw std::invalid_argument("unsupported schema_version " + std::to_string(p.schema_version)); p.revision=j.at("revision").get<std::uint64_t>(); p.content_version=j.at("content_version").get<std::string>(); p.profile_id=j.at("profile_id").get<std::string>(); const std::string phase=j.at("phase").get<std::string>(); if(phase=="ActiveRun")p.phase=game::ProfilePhase::ActiveRun;else if(phase=="BetweenRuns")p.phase=game::ProfilePhase::BetweenRuns;else throw std::invalid_argument("invalid profile phase");
+  const auto& m=j.at("meta");p.meta={m.at("legacy_wallet").get<std::int64_t>(),m.at("legacy_earned_total").get<std::int64_t>(),m.at("legacy_spent_total").get<std::int64_t>(),m.at("vigor_tier").get<std::uint8_t>(),m.at("industry_tier").get<std::uint8_t>(),m.at("generation").get<std::uint64_t>(),m.at("successful_flights").get<std::uint64_t>()};
+  const auto& s=j.at("settings");p.settings={s.at("ui_scale_percent").get<int>(),s.at("reduced_motion").get<bool>(),s.at("preferred_speed").get<int>()};
+  if(!j.at("run").is_null()){const auto& r=j.at("run");game::RunSnapshot run;run.run_id=r.at("run_id").get<std::string>();run.embedded_progression=read_progression(r.at("embedded_progression"));run.work=r.at("work").get<std::int64_t>();run.productive_tick_remainder=r.at("productive_tick_remainder").get<std::uint64_t>();run.accounted_productive_ticks=r.at("accounted_productive_ticks").get<std::uint64_t>();run.upgrade_levels=r.at("upgrade_levels").get<std::array<std::uint8_t,4>>();run.next_focus_change_tick=r.at("next_focus_change_tick").get<sim::Tick>();run.assisted=r.at("assisted").get<bool>();run.world=read_world(r.at("world"));p.run=std::move(run);}
+  if(p.profile_id.empty()||p.profile_id.size()>128||p.content_version.empty()||p.content_version.size()>64) throw std::invalid_argument("invalid profile identity");
+  if(p.meta.legacy_wallet<0||p.meta.legacy_earned_total<0||p.meta.legacy_spent_total<0||p.meta.legacy_wallet!=p.meta.legacy_earned_total-p.meta.legacy_spent_total||p.meta.vigor_tier>4||p.meta.industry_tier>4||p.meta.generation==0) throw std::invalid_argument("invalid meta accounting");
+  if(p.settings.ui_scale_percent<75||p.settings.ui_scale_percent>200||(p.settings.preferred_speed!=1&&p.settings.preferred_speed!=2&&p.settings.preferred_speed!=5)) throw std::invalid_argument("invalid settings");
+  if((p.phase==game::ProfilePhase::ActiveRun)!=p.run.has_value()) throw std::invalid_argument("profile phase and run disagree");
+  if(p.run){if(p.run->run_id.empty()||p.run->run_id.size()>128||p.run->work<0) throw std::invalid_argument("invalid run fields");validate_world(p.run->world);static_cast<void>(game::Session::restore(*p.run));}
+  return p;
+}
+} // namespace
+
+std::string encode_profile(const game::ProfileSnapshot& profile) { return profile_json(profile).dump(); }
+
+DecodeResult decode_profile(const std::string_view document) {
+  if(document.size()>kMaximumProfileBytes) return {std::nullopt,"profile exceeds 64 MiB"};
+  try { const json parsed=json::parse(document.begin(),document.end()); return {read_profile(parsed),{}}; }
+  catch(const std::exception& error){return {std::nullopt,error.what()};}
+}
+
+game::ProfileSnapshot make_new_profile(const game::Session& session, const std::uint64_t revision) {
+  std::ostringstream id; id<<"profile-"<<std::hex<<std::setw(16)<<std::setfill('0')<<session.world().seed();
+  game::ProfileSnapshot profile; profile.revision=revision; profile.content_version=session.progression().content_version; profile.profile_id=id.str(); profile.run=session.snapshot(); return profile;
+}
+
+} // namespace ant::persistence

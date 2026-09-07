@@ -4,6 +4,14 @@
 
 namespace ant::sim {
 
+Pcg32 Pcg32::restore(const std::uint64_t state, const std::uint64_t increment) {
+  if ((increment & 1U) == 0) throw std::invalid_argument("PCG increment must be odd");
+  Pcg32 rng;
+  rng.state_ = state;
+  rng.increment_ = increment;
+  return rng;
+}
+
 Pcg32::Pcg32(const std::uint64_t seed, const std::uint64_t stream)
     : increment_((stream << 1U) | 1U) {
   static_cast<void>(next());

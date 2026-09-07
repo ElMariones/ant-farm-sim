@@ -37,11 +37,21 @@ The 6-worker colony needs 0.038 carbs/sec before brood, below the source supply.
 
 ## Work: progression earned from activity
 
-Work represents colony adaptation, not edible nutrition or soil. Add **1 Work per 10 productive worker-seconds** accumulated across workers. Productive time is time actually moving on a valid committed food/spoil/corpse delivery or source approach route, performing dig hits, or completing a nursing service. Idle time, failed searches, path-queue waiting, blocked movement, and revisiting a fully cared brood grant none.
+Work represents colony adaptation, not edible nutrition or soil. Add **1 Work per 60 productive worker-seconds** accumulated across workers. Productive time is time actually moving on a valid committed food/spoil/corpse delivery or source approach route, performing dig hits, or completing a nursing service. Idle time, failed searches, path-queue waiting, blocked movement, and revisiting a fully cared brood grant none.
 
-At most one productive tick per worker per simulation tick. Maintain `productive_worker_ticks` as an integer remainder; every 200 accumulated ticks grants 1 Work, retaining the remainder. Worker count alone never grants Work. This intentionally rewards useful motion even before a round trip completes; arbitrary debug loops mark the run assisted.
+At most one productive tick per worker per simulation tick. Maintain `productive_worker_ticks` as an integer remainder; every 1,200 accumulated ticks grants 1 Work, retaining the remainder. Worker count alone never grants Work. This intentionally rewards useful motion even before a round trip completes; arbitrary debug loops mark the run assisted.
 
-With six workers productively occupied half the time, 15 Work takes about 50 seconds. If only one worker is productive half the time, it takes about 300 seconds. The 2–4 minute first-purchase target therefore requires measured activity/tuning, not merely this formula. Adjust the Work threshold or initial task mix in T008, recording the result.
+**T008 measurement (2026-09-07).** The original 200-tick threshold (1 Work per 10 productive worker-seconds) was measured, not assumed, and was far too fast: starting workers are productive roughly 85% of the time rather than the 50% the earlier estimate used, so the first 15-Work purchase became affordable after a mean of **29.2 simulated seconds** across seeds 1, 7, 42, 101 and 2026 (range 27.6–31.2 s) against a 2–4 minute target. Measured alternatives on the same seeds and policy:
+
+| Ticks per Work | Mean time to first purchase | Range |
+|---|---|---|
+| 200 (original) | 29.2 s | 27.6–31.2 s |
+| 800 | 111.9 s | 104.2–119.5 s |
+| 1,000 | 140.1 s | 129.2–152.2 s |
+| **1,200 (adopted)** | **167.8 s** | **154.2–183.6 s** |
+| 1,400 | 194.2 s | 179.2–205.7 s |
+
+1,200 is adopted because every measured seed lands inside the 2–4 minute window with margin at both ends. Release build, Apple Silicon macOS, production settings, no purchases made before the first affordable one. T013 revisits this alongside the full purchase policy.
 
 ## Run adaptations
 
@@ -81,7 +91,7 @@ One shared wallet; the branches have independent linear prerequisites. Owning ti
 | 1 | Egg duration x0.90 | Dig rate x1.15 | 3 |
 | 2 | +2 starting workers | Movement speed x1.10 | 7 |
 | 3 | Larva and pupa durations x0.85 | Food carry capacity x1.20 | 15 |
-| 4 | Queen food consumption x0.50 | Productive worker ticks required per Work: 200 -> 160 | 32 |
+| 4 | Queen food consumption x0.50 | Productive worker ticks required per Work: 1,200 -> 960 | 32 |
 
 Total to complete one branch = 57 Legacy; both = 114. Completing the full tree is not required for a v0.1 release test. Four Legacy from the first flight affords one tier-1 trait with one remaining; it cannot buy both branches immediately.
 

@@ -93,14 +93,19 @@ TEST_CASE("cargo is retained when storage fills before delivery", "[world][forag
     }
   }
   REQUIRE(carrying);
-  world.debug_set_store(ant::sim::Nutrient::Carbohydrate, world.stores().carbohydrate_capacity);
-  world.debug_set_store(ant::sim::Nutrient::Protein, world.stores().protein_capacity);
-  world.run_ticks(1'200);
-
+  // Excavation raises store capacity as the nest grows, so refill to the current capacity every
+  // tick and watch for the moment a loaded worker finds no room rather than sampling only at the
+  // end of a fixed window.
   bool retained = false;
-  for (const auto& actor : world.actors()) {
-    retained = retained || (actor.cargo_kind == ant::sim::CargoKind::Food && actor.cargo_amount > 0 &&
-                            actor.forage_state == ant::sim::ForageState::WaitingForStorage);
+  for (int tick = 0; tick < 2'400 && !retained; ++tick) {
+    world.debug_set_store(ant::sim::Nutrient::Carbohydrate, world.stores().carbohydrate_capacity);
+    world.debug_set_store(ant::sim::Nutrient::Protein, world.stores().protein_capacity);
+    world.step();
+    for (const auto& actor : world.actors()) {
+      retained = retained || (actor.cargo_kind == ant::sim::CargoKind::Food &&
+                              actor.cargo_amount > 0 &&
+                              actor.forage_state == ant::sim::ForageState::WaitingForStorage);
+    }
   }
   CHECK(retained);
   CHECK(world.invariant_holds());

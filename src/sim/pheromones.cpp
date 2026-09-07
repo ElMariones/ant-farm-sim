@@ -79,4 +79,15 @@ std::uint64_t TrailField::mass() const {
   return std::accumulate(front_.begin(), front_.end(), std::uint64_t{0});
 }
 
+void TrailField::restore(const std::vector<std::uint16_t>& cells) {
+  if (cells.size() != front_.size()) throw std::invalid_argument("trail field has wrong size");
+  front_ = cells;
+  std::fill(back_.begin(), back_.end(), 0);
+  std::fill(marked_.begin(), marked_.end(), 0);
+  active_.clear();
+  for (std::size_t index = 0; index < front_.size(); ++index) {
+    if (front_[index] > 0) { active_.push_back(index); marked_[index] = 1; }
+  }
+}
+
 } // namespace ant::sim

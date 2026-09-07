@@ -13,6 +13,8 @@
 
 namespace ant::sim {
 
+struct WorldSnapshot;
+
 struct FoodSource {
   EntityId id{};
   GridPos position{};
@@ -49,6 +51,7 @@ struct WorldStats {
   std::int64_t consumed_carbohydrate{};
   std::int64_t consumed_protein{};
   std::int64_t decayed_food{};
+  std::uint64_t productive_worker_ticks{};
 };
 
 struct ActorSnapshot {
@@ -99,6 +102,7 @@ struct TaskDiagnostics {
 class World {
 public:
   explicit World(std::uint64_t seed);
+  explicit World(const WorldSnapshot& snapshot);
 
   void step();
   void run_ticks(Tick count);
@@ -125,8 +129,11 @@ public:
   [[nodiscard]] bool extinct() const { return extinct_; }
   [[nodiscard]] Focus focus() const { return focus_; }
   void set_focus(Focus focus) { focus_ = focus; }
+  void set_adaptation_levels(const std::array<std::uint8_t, 4>& levels) { adaptation_levels_ = levels; }
+  [[nodiscard]] const std::array<std::uint8_t, 4>& adaptation_levels() const { return adaptation_levels_; }
   [[nodiscard]] std::uint64_t canonical_hash() const;
   [[nodiscard]] bool invariant_holds() const;
+  [[nodiscard]] WorldSnapshot snapshot() const;
 
   void debug_set_source_amount(std::size_t index, std::int64_t amount);
   void debug_set_source_refill(std::size_t index, std::int64_t amount);
@@ -184,6 +191,7 @@ private:
   std::vector<CorpseSnapshot> corpses_;
   std::vector<DroppedCargoSnapshot> dropped_food_;
   int connected_nest_air_{};
+  int starting_nest_air_{};
   int nursery_capacity_{12};
   std::uint64_t spoil_mound_{};
   Tick next_laying_{240};
@@ -192,6 +200,7 @@ private:
   bool decline_{};
   bool extinct_{};
   Focus focus_{Focus::Balanced};
+  std::array<std::uint8_t, 4> adaptation_levels_{};
   entt::registry registry_;
   std::vector<entt::entity> ordered_entities_;
 };

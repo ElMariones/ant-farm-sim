@@ -107,6 +107,24 @@ void Renderer::draw_button(const Rectangle bounds, const char* label, const bool
              0.0F, kInk);
 }
 
+namespace {
+
+constexpr float kUpgradeCardTop = 434.0F;
+constexpr float kUpgradeCardHeight = 31.0F;
+constexpr float kUpgradeCardStride = 36.0F;
+constexpr float kFocusButtonTop = 371.0F;
+
+Rectangle upgrade_card_bounds(const int panel_x, const int panel_width, const int index) {
+  return {static_cast<float>(panel_x + 18), kUpgradeCardTop + kUpgradeCardStride * index,
+          static_cast<float>(panel_width - 36), kUpgradeCardHeight};
+}
+
+Rectangle focus_button_bounds(const int panel_x, const int index) {
+  return {static_cast<float>(panel_x + 18 + index * 70), kFocusButtonTop, 64.0F, 29.0F};
+}
+
+} // namespace
+
 void Renderer::update_input(const float delta_seconds) {
   const int width = GetScreenWidth();
   const int height = GetScreenHeight();
@@ -127,6 +145,19 @@ void Renderer::update_input(const float delta_seconds) {
     inspector_open_ = !inspector_open_;
     camera_.layout(width, height, inspector_open_);
   }
+  if (IsKeyPressed(KEY_F1)) upgrade_requested_ = game::UpgradeId::Excavation;
+  else if (IsKeyPressed(KEY_F2)) upgrade_requested_ = game::UpgradeId::Nursing;
+  else if (IsKeyPressed(KEY_F3)) upgrade_requested_ = game::UpgradeId::Foraging;
+  else if (IsKeyPressed(KEY_F4)) upgrade_requested_ = game::UpgradeId::Queen;
+  if (IsKeyPressed(KEY_B)) focus_requested_ = sim::Focus::Balanced;
+  else if (IsKeyPressed(KEY_G)) focus_requested_ = sim::Focus::Growth;
+  else if (IsKeyPressed(KEY_X)) focus_requested_ = sim::Focus::Expansion;
+  else if (IsKeyPressed(KEY_F)) focus_requested_ = sim::Focus::Foraging;
+  if (IsKeyPressed(KEY_S)) save_requested_ = true;
+  if (recovery_prompt_) {
+    if (IsKeyPressed(KEY_R)) recover_requested_ = true;
+    if (IsKeyPressed(KEY_N)) new_colony_requested_ = true;
+  }
 
   if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
     const Vector2 mouse = GetMousePosition();
@@ -139,6 +170,19 @@ void Renderer::update_input(const float delta_seconds) {
       speed_requested_ = 2;
     } else if (CheckCollisionPointRec(mouse, {258.0F, footer_y, 58.0F, 42.0F})) {
       speed_requested_ = 5;
+    } else if (CheckCollisionPointRec(mouse, {330.0F, footer_y, 78.0F, 42.0F})) {
+      save_requested_ = true;
+    } else if (inspector_open_) {
+      const int panel_width = width >= 1120 ? 320 : 300;
+      const int panel_x = width - panel_width;
+      for (int index = 0; index < 4; ++index) {
+        if (CheckCollisionPointRec(mouse, upgrade_card_bounds(panel_x, panel_width, index))) {
+          upgrade_requested_ = static_cast<game::UpgradeId>(index);
+        }
+        if (CheckCollisionPointRec(mouse, focus_button_bounds(panel_x, index))) {
+          focus_requested_ = static_cast<sim::Focus>(index);
+        }
+      }
     }
   }
 }
@@ -149,6 +193,45 @@ void Renderer::draw(const game::GameView& view, const double interpolation_alpha
   ClearBackground(kDeepSoil);
   draw_world(view, interpolation_alpha);
   draw_interface(view, paused, speed, simulation_limited);
+  if (recovery_prompt_) draw_recovery_prompt();
+}
+
+std::string Renderer::truncate_to_width(const std::string& text, const float max_width,
+                                        const float size) const {
+  if (MeasureTextEx(font_, text.c_str(), size, 0.0F).x <= max_width) return text;
+  std::string fitted = text;
+  while (!fitted.empty() &&
+         MeasureTextEx(font_, (fitted + "...").c_str(), size, 0.0F).x > max_width) {
+    fitted.pop_back();
+  }
+  return fitted + "...";
+}
+
+void Renderer::draw_recovery_prompt() const {
+  const int width = GetScreenWidth();
+  const int height = GetScreenHeight();
+  DrawRectangle(0, 0, width, height, Color{24, 28, 25, 190});
+  const float panel_width = static_cast<float>(std::min(width - 80, 620));
+  const Rectangle panel{(static_cast<float>(width) - panel_width) * 0.5F,
+                        static_cast<float>(height) * 0.5F - 110.0F, panel_width, 220.0F};
+  DrawRectangleRounded(panel, 0.06F, 8, kPaper);
+  DrawRectangleRoundedLinesEx(panel, 0.06F, 8, 1.0F, kWarmLine);
+  const int left = static_cast<int>(panel.x) + 28;
+  int line = static_cast<int>(panel.y) + 28;
+  draw_text("Saved colony could not be read", left, line, 22);
+  line += 40;
+  draw_text("The current save file is damaged. It has been left untouched", left, line, 17,
+            kMutedInk);
+  line += 24;
+  draw_text("for diagnosis, and nothing is being saved right now.", left, line, 17, kMutedInk);
+  line += 38;
+  draw_text("R  -  restore the previous saved revision", left, line, 18);
+  line += 28;
+  draw_text("N  -  start a new colony instead", left, line, 18);
+  if (!status_line_.empty()) {
+    const std::string fitted = truncate_to_width(status_line_, panel.width - 56.0F, 15.0F);
+    draw_text(fitted.c_str(), left, static_cast<int>(panel.y + panel.height) - 34, 15, kMutedInk);
+  }
 }
 
 void Renderer::draw_world(const game::GameView& view, const double interpolation_alpha) {
@@ -301,7 +384,14 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_button({130.0F, footer_y + 9.0F, 58.0F, 42.0F}, "1x", speed == 1);
   draw_button({194.0F, footer_y + 9.0F, 58.0F, 42.0F}, "2x", speed == 2);
   draw_button({258.0F, footer_y + 9.0F, 58.0F, 42.0F}, "5x", speed == 5);
-  draw_text("Generation 1", 350, height - 39, 18);
+  draw_button({330.0F, footer_y + 9.0F, 78.0F, 42.0F}, "Save", false);
+  draw_text("Generation 1", 430, height - 39, 18);
+  if (!status_line_.empty() && width >= 1100) {
+    // Stop a long failure message from running into the control hints on the right.
+    const float available = static_cast<float>((width >= 1200 ? width - 540 : width - 20) - 560);
+    draw_text(truncate_to_width(status_line_, available, 16.0F).c_str(), 560, height - 39, 16,
+              kMutedInk);
+  }
   if (width >= 1200) {
     draw_text("Drag to pan  |  Scroll to zoom  |  Click an ant", width - 530, height - 39, 17,
               kMutedInk);
@@ -343,41 +433,28 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text(TextFormat("Forage %u   Dig %u   Nurse %u", view.tasks.workers_by_task[0],
                        view.tasks.workers_by_task[1], view.tasks.workers_by_task[2]),
             panel_x + 22, 317, 16);
-  draw_text(TextFormat("Focus: %s", focus_name(view.focus)), panel_x + 22, 344, 16, kMutedInk);
+  draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, 344, 16, kMutedInk);
   draw_text(TextFormat("%llu new cells  |  %llu births",
                        static_cast<unsigned long long>(view.stats.cells_excavated),
                        static_cast<unsigned long long>(view.stats.workers_born)),
             panel_x + 22, 367, 16, kMutedInk);
 
-  DrawLine(panel_x + 20, 397, width - 20, 397, kWarmLine);
-  draw_text("SELECTED", panel_x + 22, 416, 14, kMutedInk);
-  const sim::ActorSnapshot* selected = nullptr;
-  for (const sim::ActorSnapshot& actor : view.actors) {
-    if (selected_id_ == actor.id) {
-      selected = &actor;
-      break;
-    }
+  const std::array<const char*,4> focus_labels{{"Bal","Grow","Expand","Food"}};
+  for(int index=0;index<4;++index) draw_button(focus_button_bounds(panel_x,index),focus_labels[static_cast<std::size_t>(index)],static_cast<int>(view.focus)==index);
+  DrawLine(panel_x + 20, 405, width - 20, 405, kWarmLine);
+  draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,410,16,kMutedInk);
+  const std::array<const char*,4> upgrades{{"Mandibles","Nursery","Trails","Queen"}};
+  for(int index=0;index<4;++index){
+    const Rectangle card=upgrade_card_bounds(panel_x,panel_width,index);
+    const std::int64_t cost=view.upgrade_costs[static_cast<std::size_t>(index)];
+    const bool affordable=cost>=0&&view.work>=cost;
+    DrawRectangleRounded(card,0.15F,5,affordable?Color{224,231,207,255}:kPaper);
+    const char* label=cost<0?TextFormat("F%d  %s  L%d  max",index+1,upgrades[static_cast<std::size_t>(index)],view.upgrade_levels[static_cast<std::size_t>(index)])
+                            :TextFormat("F%d  %s  L%d  %lld",index+1,upgrades[static_cast<std::size_t>(index)],view.upgrade_levels[static_cast<std::size_t>(index)],static_cast<long long>(cost));
+    draw_text(label,panel_x+28,static_cast<int>(card.y)+6,14,affordable?kInk:kMutedInk);
   }
-  if (selected == nullptr) {
-    draw_text("Click an ant to follow its work.", panel_x + 22, 444, 17, kMutedInk);
-  } else {
-    draw_text(TextFormat("%s  #%llu", selected->kind == sim::AntKind::Queen ? "Queen" : "Worker",
-                         static_cast<unsigned long long>(selected->id)),
-              panel_x + 22, 444, 20);
-    if (selected->kind == sim::AntKind::Worker) {
-      draw_text(sim::task_name(selected->task), panel_x + 22, 475, 18);
-      if (selected->cargo_amount > 0) {
-        const char* carried = selected->cargo_kind == sim::CargoKind::Spoil ? "Carrying spoil" :
-                              selected->cargo_kind == sim::CargoKind::Corpse ? "Carrying a corpse" :
-                              TextFormat("Carrying %lld %s", static_cast<long long>(selected->cargo_amount / 1000), nutrient_name(selected->cargo_nutrient));
-        draw_text(carried, panel_x + 22, 504, 17);
-      } else {
-        draw_text("Cargo is empty", panel_x + 22, 504, 17, kMutedInk);
-      }
-    } else {
-      draw_text(view.queen_alive ? "Founding queen | well tended" : "Queen deceased", panel_x + 22, 475, 17);
-    }
-  }
+  draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,582,14,kMutedInk);
+  /* Selection stays available in the world; temporary M3 cards occupy the inspector detail area. */
 
   if (height >= 720) {
     const int note_y = height - 178;
@@ -426,6 +503,11 @@ void Renderer::update_selection(const game::GameView& view) {
 void Renderer::clear_requests() {
   toggle_pause_requested_ = false;
   speed_requested_.reset();
+  upgrade_requested_.reset();
+  focus_requested_.reset();
+  save_requested_ = false;
+  recover_requested_ = false;
+  new_colony_requested_ = false;
 }
 
 } // namespace ant::presentation

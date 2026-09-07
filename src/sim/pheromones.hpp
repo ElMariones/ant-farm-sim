@@ -16,6 +16,7 @@ public:
   [[nodiscard]] std::uint16_t at(GridPos position) const;
   [[nodiscard]] std::uint64_t mass() const;
   [[nodiscard]] const std::vector<std::uint16_t>& cells() const { return front_; }
+  void restore(const std::vector<std::uint16_t>& cells);
 
 private:
   [[nodiscard]] static std::size_t index(GridPos position);
