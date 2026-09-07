@@ -34,7 +34,7 @@ Implemented and verified on Apple Silicon macOS with Apple Clang 21 and CMake 4.
 
 ## Validation of this deliverable
 
-- `ctest --preset headless`: pass, **99/99 tests including the sixty-minute soak**, in 183 s. The soak previously timed out on the Linux runner.
+- `ctest --preset headless`: pass, **108/108 tests including the sixty-minute soak**, in 184 s. The soak previously timed out on the Linux runner.
 - `cmake --preset release` and `cmake --build --preset release`: pass.
 - `ant_headless --verify-round-trip` passes at 20,000 / 60,000 / 100,000 / 120,000 / 140,000 / 160,000 / 200,000 ticks on seed 42, and at 40,000 and 120,000 ticks on seeds 1, 7, 101 and 2026.
 
@@ -91,6 +91,29 @@ The profile schema is **version 2**, with a tested in-memory v1 migration that f
 - **The sixty-minute soak was timing out in CI on Linux**, which is what turned M4's build red. Each excavator rescanned every worker for every frontier to count existing claims, so the tick cost was quadratic in population. Claims are now tallied once per tick and released when a worker takes a new target, finishes a cell, or switches task. Missing any of those releases leaves phantom claims that measurably slow the colony, which is how the first attempt was caught.
 - Debug soak: **50 s, down from a 1,500 s CTest timeout**. Release soak 1.9 s. The full suite including the soak now runs in 183 s.
 - Balance was re-measured after both changes and held: flight at 30.1–30.8 min with purchases and 40.2–40.4 min without, first investment at 2.7–2.9 min, no extinctions. First delivery moved from 52.6–75.0 s to 64.8–117.4 s, because foragers now climb the spoil their own colony piled up. Vigor I improves first birth on four of five seeds rather than five; recorded in the balance report.
+
+### Interface interaction layer (T014, partial)
+
+`UiState` owns pointer state and per-widget hover/press animation, and deliberately has no raylib
+dependency so its rules are covered in the headless build. Controls are now registered where they
+are drawn rather than in a separate hit-test pass, which removes the class of bug that produced the
+twenty-pixel card mismatch in M3 — a hit box can no longer drift from its control because they are
+the same expression.
+
+- Hover and press are eased 0..1 weights, not booleans, so buttons lift, tint and inset smoothly.
+  The easing is an exponential approach, which is **verified to give the same result at 20 Hz and
+  120 Hz** so controls do not animate differently on a slower machine.
+- A click completes only where it began: dragging off a control cancels it, and releasing over a
+  control that was not pressed does not activate it.
+- Disabled controls never hover, hold or click, but still block the world underneath, so a dead
+  control is not a hole in the panel.
+- Adaptation cards and the focus buttons now carry hover tooltips that say what an adaptation does,
+  how much Work is still needed, or that focus unlocks at twelve workers.
+
+**The appearance of all of this is unverified.** The machine's screen locked partway through this
+work (`CGSSessionScreenIsLocked`), so GLFW refuses to create a window and no screenshot could be
+taken. The interaction rules are covered by 9 unit cases and 76 assertions; the lift, tint, shadow,
+tooltip placement and overall feel have not been looked at once. That review still needs to happen.
 
 ### Presentation upgrade (visual slice of T014)
 

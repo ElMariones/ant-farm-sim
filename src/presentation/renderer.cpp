@@ -77,6 +77,14 @@ Vector2 offset_along(const Vector2 origin, const float heading, const float alon
   return {origin.x + along * cos_h - across * sin_h, origin.y + along * sin_h + across * cos_h};
 }
 
+Color mix(const Color from, const Color to, const float weight) {
+  const float t = std::clamp(weight, 0.0F, 1.0F);
+  const auto blend = [t](const unsigned char a, const unsigned char b) {
+    return static_cast<unsigned char>(static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * t);
+  };
+  return {blend(from.r, to.r), blend(from.g, to.g), blend(from.b, to.b), blend(from.a, to.a)};
+}
+
 Color shade(const Color base, const int delta) {
   return {static_cast<unsigned char>(std::clamp(static_cast<int>(base.r) + delta, 0, 255)),
           static_cast<unsigned char>(std::clamp(static_cast<int>(base.g) + delta, 0, 255)),
@@ -158,12 +166,43 @@ void Renderer::draw_text(const char* text, const int x, const int y, const int s
              0.0F, color);
 }
 
-void Renderer::draw_button(const Rectangle bounds, const char* label, const bool active) const {
-  DrawRectangleRounded(bounds, 0.22F, 8, active ? kSelection : Color{229, 219, 195, 255});
-  DrawRectangleRoundedLinesEx(bounds, 0.22F, 8, 1.0F, active ? Color{69, 111, 103, 255} : kWarmLine);
+void Renderer::draw_button(const Rectangle bounds, const char* label, const bool active,
+                          const WidgetVisual& visual, const bool enabled) const {
+  // Lift on hover, settle on press. Both are eased weights, so the motion is smooth and matches at
+  // any frame rate.
+  const float lift = visual.hover * 2.0F - visual.press * 2.6F;
+  const Rectangle body{bounds.x, bounds.y - lift, bounds.width, bounds.height};
+  const Color resting = active ? kSelection : Color{229, 219, 195, 255};
+  const Color warmed = active ? shade(kSelection, 14) : Color{243, 235, 214, 255};
+  const Color fill = enabled ? mix(resting, warmed, visual.hover) : Color{226, 219, 202, 255};
+
+  if (enabled && visual.hover > 0.01F) {
+    const float spread = 1.0F + visual.hover * 2.5F;
+    DrawRectangleRounded({body.x - spread * 0.5F, body.y + 2.0F + spread * 0.5F,
+                          body.width + spread, body.height},
+                         0.24F, 8, Fade(BLACK, 0.10F * visual.hover));
+  }
+  DrawRectangleRounded(body, 0.22F, 8, fill);
+  const Color edge = active ? Color{69, 111, 103, 255} : mix(kWarmLine, Color{146, 128, 96, 255}, visual.hover);
+  DrawRectangleRoundedLinesEx(body, 0.22F, 8, 1.0F + visual.hover * 0.6F, edge);
   const Vector2 measured = MeasureTextEx(font_, label, 19.0F, 0.0F);
-  DrawTextEx(font_, label, {bounds.x + (bounds.width - measured.x) * 0.5F, bounds.y + 8.0F}, 19.0F,
-             0.0F, kInk);
+  DrawTextEx(font_, label, {body.x + (body.width - measured.x) * 0.5F, body.y + 8.0F}, 19.0F, 0.0F,
+             enabled ? kInk : kMutedInk);
+}
+
+void Renderer::draw_tooltip(const char* title, const char* body, const float anchor_x,
+                            const float anchor_y) const {
+  const Vector2 title_size = MeasureTextEx(font_, title, 17.0F, 0.0F);
+  const Vector2 body_size = MeasureTextEx(font_, body, 15.0F, 0.0F);
+  const float width = std::max(title_size.x, body_size.x) + 24.0F;
+  const float height = 52.0F;
+  const float x = std::clamp(anchor_x, 8.0F, static_cast<float>(GetScreenWidth()) - width - 8.0F);
+  const float y = std::max(8.0F, anchor_y - height - 8.0F);
+  DrawRectangleRounded({x + 1.0F, y + 3.0F, width, height}, 0.16F, 6, Fade(BLACK, 0.16F));
+  DrawRectangleRounded({x, y, width, height}, 0.16F, 6, kPaperSoft);
+  DrawRectangleRoundedLinesEx({x, y, width, height}, 0.16F, 6, 1.0F, kWarmLine);
+  DrawTextEx(font_, title, {x + 12.0F, y + 8.0F}, 17.0F, 0.0F, kInk);
+  DrawTextEx(font_, body, {x + 12.0F, y + 29.0F}, 15.0F, 0.0F, kMutedInk);
 }
 
 namespace {
@@ -228,40 +267,22 @@ void Renderer::update_input(const float delta_seconds) {
     if (IsKeyPressed(KEY_N)) new_colony_requested_ = true;
   }
 
-  if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-    const Vector2 mouse = GetMousePosition();
-    const float footer_y = static_cast<float>(height - 51);
-    if (CheckCollisionPointRec(mouse, {18.0F, footer_y, 94.0F, 42.0F})) {
-      toggle_pause_requested_ = true;
-    } else if (CheckCollisionPointRec(mouse, {130.0F, footer_y, 58.0F, 42.0F})) {
-      speed_requested_ = 1;
-    } else if (CheckCollisionPointRec(mouse, {194.0F, footer_y, 58.0F, 42.0F})) {
-      speed_requested_ = 5;
-    } else if (CheckCollisionPointRec(mouse, {258.0F, footer_y, 58.0F, 42.0F})) {
-      speed_requested_ = 20;
-    } else if (CheckCollisionPointRec(mouse, {330.0F, footer_y, 78.0F, 42.0F})) {
-      save_requested_ = true;
-    } else if (inspector_open_) {
-      const int panel_width = width >= 1120 ? 320 : 300;
-      const int panel_x = width - panel_width;
-      for (int index = 0; index < 4; ++index) {
-        if (CheckCollisionPointRec(mouse, upgrade_card_bounds(panel_x, panel_width, index))) {
-          upgrade_requested_ = static_cast<game::UpgradeId>(index);
-        }
-        if (CheckCollisionPointRec(mouse, focus_button_bounds(panel_x, index))) {
-          focus_requested_ = static_cast<sim::Focus>(index);
-        }
-      }
-    }
-  }
+  const Vector2 mouse = GetMousePosition();
+  ui_.begin_frame(mouse.x, mouse.y, IsMouseButtonDown(MOUSE_BUTTON_LEFT),
+                  IsMouseButtonPressed(MOUSE_BUTTON_LEFT), IsMouseButtonReleased(MOUSE_BUTTON_LEFT),
+                  delta_seconds);
 }
 
 void Renderer::draw(const game::GameView& view, const double interpolation_alpha, const bool paused,
                     const int speed, const bool simulation_limited) {
   update_selection(view);
+  tooltip_title_ = nullptr;
   ClearBackground(kDeepSoil);
   draw_world(view, interpolation_alpha);
   draw_interface(view, paused, speed, simulation_limited);
+  if (tooltip_title_ != nullptr && !legacy_panel_open_ && !recovery_prompt_) {
+    draw_tooltip(tooltip_title_, tooltip_body_.c_str(), tooltip_x_, tooltip_y_);
+  }
   if (legacy_panel_open_) draw_legacy_panel(view);
   if (recovery_prompt_) draw_recovery_prompt();
 }
@@ -724,11 +745,19 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   const float footer_y = static_cast<float>(height - 60);
   DrawRectangle(0, height - 60, width, 60, kPaperSoft);
   DrawLine(0, height - 60, width, height - 60, kWarmLine);
-  draw_button({18.0F, footer_y + 9.0F, 94.0F, 42.0F}, paused ? "Resume" : "Pause", paused);
-  draw_button({130.0F, footer_y + 9.0F, 58.0F, 42.0F}, "1x", speed == 1);
-  draw_button({194.0F, footer_y + 9.0F, 58.0F, 42.0F}, "5x", speed == 5);
-  draw_button({258.0F, footer_y + 9.0F, 58.0F, 42.0F}, "20x", speed == 20);
-  draw_button({330.0F, footer_y + 9.0F, 78.0F, 42.0F}, "Save", false);
+  const auto footer_button = [&](const std::uint32_t id, const Rectangle bounds, const char* label,
+                                const bool active) {
+    const WidgetVisual visual = ui_.track(id, {bounds.x, bounds.y, bounds.width, bounds.height});
+    draw_button(bounds, label, active, visual);
+    return visual.clicked;
+  };
+  if (footer_button(1, {18.0F, footer_y + 9.0F, 94.0F, 42.0F}, paused ? "Resume" : "Pause", paused)) {
+    toggle_pause_requested_ = true;
+  }
+  if (footer_button(2, {130.0F, footer_y + 9.0F, 58.0F, 42.0F}, "1x", speed == 1)) speed_requested_ = 1;
+  if (footer_button(3, {194.0F, footer_y + 9.0F, 58.0F, 42.0F}, "5x", speed == 5)) speed_requested_ = 5;
+  if (footer_button(4, {258.0F, footer_y + 9.0F, 58.0F, 42.0F}, "20x", speed == 20)) speed_requested_ = 20;
+  if (footer_button(5, {330.0F, footer_y + 9.0F, 78.0F, 42.0F}, "Save", false)) save_requested_ = true;
   draw_text("Generation 1", 430, height - 39, 18);
   if (!status_line_.empty() && width >= 1100) {
     // Stop a long failure message from running into the control hints on the right.
@@ -784,18 +813,66 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
   draw_text(TextFormat("Focus: %s%s", focus_name(view.focus), view.focus_cooldown_remaining > 0 ? " (cooldown)" : ""), panel_x + 22, 359, 16, kMutedInk);
 
   const std::array<const char*,4> focus_labels{{"Bal","Grow","Expand","Food"}};
-  for(int index=0;index<4;++index) draw_button(focus_button_bounds(panel_x,index),focus_labels[static_cast<std::size_t>(index)],static_cast<int>(view.focus)==index);
+  for (int index = 0; index < 4; ++index) {
+    const Rectangle bounds = focus_button_bounds(panel_x, index);
+    const WidgetVisual visual =
+        ui_.track(20 + static_cast<std::uint32_t>(index),
+                  {bounds.x, bounds.y, bounds.width, bounds.height}, view.focus_available);
+    draw_button(bounds, focus_labels[static_cast<std::size_t>(index)],
+                static_cast<int>(view.focus) == index, visual, view.focus_available);
+    if (visual.clicked) focus_requested_ = static_cast<sim::Focus>(index);
+    if (visual.hovered && !view.focus_available) {
+      tooltip_title_ = "Colony focus";
+      tooltip_body_ = "Unlocks at 12 workers";
+      tooltip_x_ = bounds.x;
+      tooltip_y_ = bounds.y;
+    }
+  }
   DrawLine(panel_x + 20, 415, width - 20, 415, kWarmLine);
   draw_text(TextFormat("WORK  %lld",static_cast<long long>(view.work)),panel_x+22,419,16,kMutedInk);
   const std::array<const char*,4> upgrades{{"Mandibles","Nursery","Trails","Queen"}};
-  for(int index=0;index<4;++index){
-    const Rectangle card=upgrade_card_bounds(panel_x,panel_width,index);
-    const std::int64_t cost=view.upgrade_costs[static_cast<std::size_t>(index)];
-    const bool affordable=cost>=0&&view.work>=cost;
-    DrawRectangleRounded(card,0.15F,5,affordable?Color{224,231,207,255}:kPaper);
-    const char* label=cost<0?TextFormat("F%d  %s  L%d  max",index+1,upgrades[static_cast<std::size_t>(index)],view.upgrade_levels[static_cast<std::size_t>(index)])
-                            :TextFormat("F%d  %s  L%d  %lld",index+1,upgrades[static_cast<std::size_t>(index)],view.upgrade_levels[static_cast<std::size_t>(index)],static_cast<long long>(cost));
-    draw_text(label,panel_x+28,static_cast<int>(card.y)+6,14,affordable?kInk:kMutedInk);
+  const std::array<const char*, 4> upgrade_effects{{"+25% dig rate per level",
+                                                    "-10% brood time per level",
+                                                    "+20% carry per level",
+                                                    "-15% laying time per level"}};
+  for (int index = 0; index < 4; ++index) {
+    const Rectangle card = upgrade_card_bounds(panel_x, panel_width, index);
+    const std::int64_t cost = view.upgrade_costs[static_cast<std::size_t>(index)];
+    const bool maxed = cost < 0;
+    const bool affordable = !maxed && view.work >= cost;
+    // Tracked as enabled so an unaffordable card still explains itself on hover; the click is
+    // gated below instead.
+    const WidgetVisual visual =
+        ui_.track(30 + static_cast<std::uint32_t>(index), {card.x, card.y, card.width, card.height});
+    const float lift = visual.hover * 1.6F - visual.press * 2.0F;
+    const Rectangle body{card.x, card.y - lift, card.width, card.height};
+    const Color resting = affordable ? Color{224, 231, 207, 255} : kPaper;
+    const Color warmed = affordable ? Color{236, 242, 219, 255} : Color{243, 236, 217, 255};
+    if (visual.hover > 0.01F) {
+      DrawRectangleRounded({body.x - 1.0F, body.y + 2.0F, body.width + 2.0F, body.height}, 0.16F, 5,
+                           Fade(BLACK, 0.09F * visual.hover));
+    }
+    DrawRectangleRounded(body, 0.15F, 5, mix(resting, warmed, visual.hover));
+    if (affordable) {
+      DrawRectangleRoundedLinesEx(body, 0.15F, 5, 0.6F + visual.hover,
+                                  Fade(Color{122, 148, 96, 255}, 0.5F + visual.hover * 0.5F));
+    }
+    const char* label =
+        maxed ? TextFormat("F%d  %s  L%d  max", index + 1, upgrades[static_cast<std::size_t>(index)],
+                           view.upgrade_levels[static_cast<std::size_t>(index)])
+              : TextFormat("F%d  %s  L%d  %lld", index + 1, upgrades[static_cast<std::size_t>(index)],
+                           view.upgrade_levels[static_cast<std::size_t>(index)],
+                           static_cast<long long>(cost));
+    draw_text(label, panel_x + 28, static_cast<int>(body.y) + 6, 14, affordable ? kInk : kMutedInk);
+    if (visual.clicked && affordable) upgrade_requested_ = static_cast<game::UpgradeId>(index);
+    if (visual.hovered) {
+      tooltip_title_ = upgrades[static_cast<std::size_t>(index)];
+      tooltip_body_ = maxed ? "Fully adapted"
+                    : affordable ? upgrade_effects[static_cast<std::size_t>(index)]
+                                 : std::string("Needs ") + std::to_string(cost) + " Work";
+      tooltip_x_ = body.x;
+      tooltip_y_ = body.y;
+    }
   }
   draw_text(game::bottleneck_name(view.bottleneck),panel_x+22,576,14,kMutedInk);
   /* Selection stays available in the world; temporary M3 cards occupy the inspector detail area. */

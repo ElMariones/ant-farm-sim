@@ -3,6 +3,7 @@
 #include "game/view.hpp"
 #include "game/progression.hpp"
 #include "presentation/camera.hpp"
+#include "presentation/ui_state.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -57,9 +58,16 @@ private:
   void update_selection(const game::GameView& view);
   void draw_text(const char* text, int x, int y, int size = 20,
                  Color color = Color{37, 45, 40, 255}) const;
-  void draw_button(Rectangle bounds, const char* label, bool active) const;
+  void draw_button(Rectangle bounds, const char* label, bool active, const WidgetVisual& visual,
+                   bool enabled = true) const;
+  void draw_tooltip(const char* title, const char* body, float anchor_x, float anchor_y) const;
 
   CameraController camera_;
+  UiState ui_;
+  const char* tooltip_title_{};
+  std::string tooltip_body_;
+  float tooltip_x_{};
+  float tooltip_y_{};
   Font font_{};
   bool font_loaded_{};
   // The ground only changes when a cell is dug, so it is baked once into a texture instead of
