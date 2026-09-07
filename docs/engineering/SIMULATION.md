@@ -43,7 +43,9 @@ No world expansion in v0.1. At a technical population bound, queen output pauses
 
 ## Navigation and reservations
 
-Home routes use a multi-source BFS distance field from valid nursery/storage entry cells. Recompute after topology changes, once before next movement, for this modest grid. Outbound travel uses local exploration plus bounded A* to a discovered reachable source/frontier; deterministic neighbor order N,E,S,W breaks ties.
+Home routes use a multi-source BFS distance field from valid nursery/storage entry cells. Recompute after topology changes, once before next movement, for this modest grid. Outbound travel uses local exploration plus bounded A* to a discovered reachable source or dig face.
+
+Ties are broken by a **per-ant route bias**: one stable key from the run seed and the actor id, hashed separately so route choice consumes no simulation RNG. Where several neighbours are equally close to home the ant follows its own preference rather than a fixed N,E,S,W order, and A* carries the same preference in its open-set comparator — the neighbour iteration order cannot affect the result, because which predecessor claims a cell is decided by pop order. Variation only ever selects among equally short options, so no ant detours and a one-cell passage still has exactly one route. A zero key restores the canonical index order for connectivity checks and fixtures.
 
 Budget: at most 16 new A* requests/tick, at most 4,096 expanded cells/request. Deferred actors wait/explore locally; they never teleport. A path search that exhausts the budget is pending or retryable, not proof the target is unreachable. Permanently unreachable candidates are retried only after cooldown/topology revision.
 
@@ -171,4 +173,4 @@ stuck this way, and because they moved every tick they counted as productive whi
 
 ## Accepted colony behavior revision (2026-09-07; not yet implemented)
 
-See [NEXT_STEPS](../planning/NEXT_STEPS.md) for T006b and T003a/b: deterministic per-ant route variation; collision-safe diagonal fixed-point travel; and separate useful-space accounting. T006a is delivered — excavation now plans persistent dig faces as described above — but routing is still four-neighbor and travel is still X-first, and every connected air cell still counts toward capacity. Implement snapshot/migration and balance checks together with those changes; the guide does not silently change existing saves.
+See [NEXT_STEPS](../planning/NEXT_STEPS.md) for T006b and T003b: collision-safe diagonal fixed-point travel and separate useful-space accounting. T006a and T003a are delivered — excavation plans persistent dig faces, and equally short routes vary per ant — but routing is still four-neighbor and travel is still X-first, and every connected air cell still counts toward capacity. Implement snapshot/migration and balance checks together with those changes; the guide does not silently change existing saves.

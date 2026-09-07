@@ -23,8 +23,8 @@ The [audit and design guide](NEXT_STEPS.md) defines source findings, implementat
 |---|---|---|---|
 | T014a — complete | DPI-correct rendered-pose selection, click/pan separation, modal ownership, Escape/save keys, selection lifecycle and responsive inspector | T012 | Native moving-ant selection at both sizes/DPI, no modal click-through, gesture and scene tests |
 | T006a — complete | Persistent bounded dig faces, connected corridors, branch/chamber geometry, explicit spoil overflow | T014a | Seeded tunnel time sequences; contention, unreachable-face and spoil accounting tests |
-| **T003a — next ready** | Deterministic per-ant route tie variation | T006a | Multiple legal routes in wide fixture, narrow-route success and continuation equality |
-| T003b | Weighted diagonal navigation, fixed-point 2D travel and safe lane offsets | T003a | All octants, speed, no corner cuts, topology invalidation and mid-route saves |
+| T003a — complete | Deterministic per-ant route tie variation | T006a | Multiple legal routes in wide fixture, narrow-route success and continuation equality |
+| **T003b — next ready** | Weighted diagonal navigation, fixed-point 2D travel and safe lane offsets | T003a | All octants, speed, no corner cuts, topology invalidation and mid-route saves |
 | T014b | Subtle stable size/color/gait variation using shared render/pick poses | T003b | Zoom-tier native captures, stable reload appearance, unchanged sim state |
 | T006b | Separate useful chamber capacity from transit air, compatibility accounting | T006a, T003b | No double-granted capacity on migration/reload; reachable-space invariants |
 | T013a | Re-baseline geometry/motion, affordable first trait, delayed flight and long-lived colony policies | T006b, T003b | Five seeds × both policies, tier-I local benefit measurement, larger-payout and no-flight evidence |

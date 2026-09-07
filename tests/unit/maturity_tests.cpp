@@ -60,14 +60,18 @@ TEST_CASE("maturity requires workers, births and run age together", "[world][mat
   }
   SECTION("one birth short of the threshold is not enough") {
     World world = aged_colony();
+    // Hold the nursery empty: a hatch during the settle would move the threshold under test.
+    world.debug_clear_brood();
     world.debug_spawn_workers(100);
     world.debug_set_workers_born(149);
     world.run_ticks(2 * kSecond);
+    REQUIRE(world.stats().workers_born == 149);
     REQUIRE(world.living_workers() >= 100);
     CHECK_FALSE(world.mature());
   }
   SECTION("one worker short of the threshold is not enough") {
     World world = aged_colony();
+    world.debug_clear_brood();
     world.debug_set_workers_born(150);
     while (world.living_workers() < 99) world.debug_spawn_workers(1);
     world.run_ticks(2 * kSecond);

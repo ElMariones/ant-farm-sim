@@ -238,7 +238,7 @@ void World::process_forager(const entt::entity e, int& path_budget) {
     if (cargo.amount == 0) { cargo.kind = CargoKind::None; f.state = ForageState::AtHome; ++stats_.completed_round_trips; } return;
   }
   if (f.state == ForageState::AtHome) {
-    if (cargo.amount > 0) { f.state = ForageState::Returning; m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell()); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); }
+    if (cargo.amount > 0) { f.state = ForageState::Returning; m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell(), bias_for(e)); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); }
     else if (tick_ >= f.retry_after) choose_source(e, path_budget);
   }
   if ((f.state == ForageState::ToSource || f.state == ForageState::Returning) && m.path_revision != grid_.navigation_revision()) { ++stats_.navigation_replans; refresh_path(e, path_budget); }
@@ -274,7 +274,7 @@ void World::choose_source(const entt::entity e, int& path_budget) {
                               carried_food_[static_cast<std::size_t>(source.nutrient)] - source.reserved;
     const std::int64_t reservation = std::min<std::int64_t>({carry_capacity, source.amount - source.reserved, room}); if (reservation <= 0) continue;
     source.reserved += reservation; f.source_index = source_index; f.reserved_amount = reservation; f.reservation_expiry = tick_ + 1'200; ++stats_.path_requests; --path_budget;
-    const PathResult path = find_path(grid_, start, source.position); stats_.path_expansions += path.expanded;
+    const PathResult path = find_path(grid_, start, source.position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
     if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); f.state = ForageState::ToSource; return; }
     release_reservation(f); f.retry_after = tick_ + 200; if (path.status == PathStatus::BudgetExhausted) return;
   }
@@ -282,9 +282,9 @@ void World::choose_source(const entt::entity e, int& path_budget) {
 
 void World::refresh_path(const entt::entity e, int& path_budget) {
   Forager& f = registry_.get<Forager>(e); Movement& m = registry_.get<Movement>(e); const GridPos start = registry_.get<Position>(e).cell(); clear_path(m);
-  if (f.state == ForageState::Returning) { m.path = home_field_.path_home(grid_, start); m.path_revision = grid_.navigation_revision(); return; }
+  if (f.state == ForageState::Returning) { m.path = home_field_.path_home(grid_, start, bias_for(e)); m.path_revision = grid_.navigation_revision(); return; }
   if (f.state != ForageState::ToSource || f.source_index < 0 || path_budget <= 0) return; FoodSource& source = sources_[static_cast<std::size_t>(f.source_index)]; ++stats_.path_requests; --path_budget;
-  const PathResult path = find_path(grid_, start, source.position); stats_.path_expansions += path.expanded;
+  const PathResult path = find_path(grid_, start, source.position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
   if (path.status == PathStatus::Complete) { m.path = path.cells; m.path_revision = grid_.navigation_revision(); }
   else { release_reservation(f); f.state = ForageState::AtHome; f.retry_after = tick_ + 200; }
 }
@@ -321,7 +321,7 @@ void World::arrive(const entt::entity e, int&) {
     FoodSource& source = sources_[static_cast<std::size_t>(f.source_index)]; const std::int64_t picked = std::min(source.amount, f.reserved_amount); source.amount -= picked; source.reserved -= f.reserved_amount; f.reserved_amount = 0;
     if (picked <= 0) { f.source_index = -1; f.state = ForageState::AtHome; f.retry_after = tick_ + 100; clear_path(m); return; }
     cargo.kind = CargoKind::Food; cargo.nutrient = source.nutrient; cargo.amount = picked; carried_food_[static_cast<std::size_t>(source.nutrient)] += picked; stats_.picked_up += picked; f.state = ForageState::Returning;
-    m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell()); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); return;
+    m.path = home_field_.path_home(grid_, registry_.get<Position>(e).cell(), bias_for(e)); m.next_cell = 0; m.path_revision = grid_.navigation_revision(); return;
   }
   if (f.state == ForageState::Returning) {
     const std::int64_t delivered = std::min(capacity_for(cargo.nutrient) - store_for(cargo.nutrient), cargo.amount); store_for(cargo.nutrient) += delivered; cargo.amount -= delivered; carried_food_[static_cast<std::size_t>(cargo.nutrient)] -= delivered; stats_.delivered += delivered; clear_path(m);
@@ -333,7 +333,7 @@ void World::release_reservation(Forager& f) { if (f.source_index >= 0 && f.reser
 
 void World::route_to(const entt::entity e, const GridPos target, int& path_budget) {
   Movement& m = registry_.get<Movement>(e); if (m.next_cell < m.path.size() && m.path_revision == grid_.navigation_revision()) { static_cast<void>(move_one_tick(e)); return; }
-  if (registry_.get<Position>(e).cell() == target || path_budget <= 0) return; ++stats_.path_requests; --path_budget; const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), target); stats_.path_expansions += path.expanded;
+  if (registry_.get<Position>(e).cell() == target || path_budget <= 0) return; ++stats_.path_requests; --path_budget; const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), target, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
   if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); static_cast<void>(move_one_tick(e)); }
 }
 
@@ -390,7 +390,7 @@ void World::process_cleaner(const entt::entity e, int& path_budget) {
 
 void World::deliver_non_food(const entt::entity e) {
   Cargo& cargo = registry_.get<Cargo>(e); Movement& m = registry_.get<Movement>(e); const GridPos outlet{home_.x, 31};
-  if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), outlet); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
+  if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), outlet, 4096, bias_for(e)); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
   // The apron is deliberately bounded, so a full one does not trap the excavator holding the grain.
   // The haul still counts as work done; the grain is recorded as overflow tipped out of view rather
   // than silently counted as mound, which is the only way the two stay reconcilable.
@@ -498,6 +498,10 @@ bool World::deposit_spoil() {
   if (!found) return false;
   grid_.set(best, Material::Soil);
   return true;
+}
+
+RouteBias World::bias_for(const entt::entity e) const {
+  return route_bias(seed_, registry_.get<Identity>(e).id);
 }
 
 void World::release_dig_claim(const WorkerMind& mind) {
@@ -609,6 +613,7 @@ void World::debug_set_worker_lifespan(const EntityId id, const Tick lifespan) { 
 void World::debug_spawn_brood(const BroodStage stage, const Tick progress, const Tick starvation, const BroodRole role) { brood_.push_back({next_id_++, stage, home_, progress, brood_target(stage, role), 0, starvation, role}); }
 void World::debug_spawn_workers(const int count) { for (int i = 0; i < count; ++i) spawn_worker(home_); }
 void World::debug_set_workers_born(const std::uint64_t births) { stats_.workers_born = births; }
+void World::debug_clear_brood() { brood_.clear(); }
 void World::debug_set_mature() { mature_ = true; }
 void World::debug_kill_workers(const int count) {
   int removed = 0;

@@ -169,6 +169,9 @@ public:
   void debug_set_workers_born(std::uint64_t births);
   // Latches maturity without simulating the twelve minutes and 150 births that normally reach it,
   // so caste-assignment behaviour can be tested independently of how maturity was reached.
+  // Empties the nursery so a boundary test can hold population and births still while the colony
+  // ticks. Without it a hatch during the settle silently moves the very threshold under test.
+  void debug_clear_brood();
   void debug_set_mature();
   void debug_kill_queen();
 
@@ -208,6 +211,8 @@ private:
   void update_maturity();
   void refresh_dig_claims();
   void release_dig_claim(const WorkerMind& mind);
+  // One stable route preference per ant, so ants sharing endpoints need not share a route.
+  [[nodiscard]] RouteBias bias_for(entt::entity e) const;
 
   std::uint64_t seed_{};
   Tick tick_{};

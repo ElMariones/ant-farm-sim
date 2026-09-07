@@ -1,5 +1,7 @@
 #include "sim/navigation.hpp"
 
+#include "sim/rng.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -25,7 +27,19 @@ int heuristic(const GridPos a, const GridPos b) {
   return std::abs(a.x - b.x) + std::abs(a.y - b.y);
 }
 
+// A stable per-ant ordering value for one candidate cell. Nothing here consumes simulation RNG, so
+// route variation cannot shift brood or job outcomes.
+std::uint64_t preference(const std::uint64_t key, const GridPos cell) {
+  return mix_seed(key ^ (static_cast<std::uint64_t>(cell.x) * 0x9E3779B97F4A7C15ULL) ^
+                  (static_cast<std::uint64_t>(cell.y) * 0xBF58476D1CE4E5B9ULL));
+}
+
 } // namespace
+
+RouteBias route_bias(const std::uint64_t seed, const std::uint64_t actor_id) {
+  // Force a non-zero key so an actor never accidentally lands on "no variation".
+  return {mix_seed(seed ^ 0x0D16B1A5ULL ^ (actor_id * 0x9E3779B97F4A7C15ULL)) | 1ULL};
+}
 
 void HomeField::rebuild(const Grid& grid, const GridPos home) {
   if (!grid.walkable(home)) {
@@ -61,7 +75,8 @@ int HomeField::distance(const GridPos position) const {
   return distances_[index_of(position)];
 }
 
-std::vector<GridPos> HomeField::path_home(const Grid& grid, const GridPos start) const {
+std::vector<GridPos> HomeField::path_home(const Grid& grid, const GridPos start,
+                                          const RouteBias bias) const {
   if (revision_ != grid.navigation_revision() || distance(start) < 0) {
     return {};
   }
@@ -70,11 +85,23 @@ std::vector<GridPos> HomeField::path_home(const Grid& grid, const GridPos start)
   while (current != home_) {
     const int current_distance = distance(current);
     GridPos best = current;
+    std::uint64_t best_preference = 0;
+    // Every descending neighbour is an equally short way home. Which one this ant takes is settled
+    // by its own stable preference, so a wide gallery carries several routes and a one-cell
+    // bottleneck still carries exactly one.
     for (const GridPos offset : kNeighbors) {
       const GridPos candidate{current.x + offset.x, current.y + offset.y};
-      if (distance(candidate) == current_distance - 1) {
+      if (distance(candidate) != current_distance - 1) {
+        continue;
+      }
+      if (bias.key == 0) {
         best = candidate;
         break;
+      }
+      const std::uint64_t candidate_preference = preference(bias.key, candidate);
+      if (best == current || candidate_preference < best_preference) {
+        best = candidate;
+        best_preference = candidate_preference;
       }
     }
     if (best == current) {
@@ -87,7 +114,7 @@ std::vector<GridPos> HomeField::path_home(const Grid& grid, const GridPos start)
 }
 
 PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
-                     const std::size_t expansion_budget) {
+                     const std::size_t expansion_budget, const RouteBias bias) {
   if (!grid.walkable(start) || !grid.walkable(goal)) {
     return {};
   }
@@ -99,6 +126,11 @@ PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
     int f{};
     int g{};
     std::size_t index{};
+    // Settles which of two equally good nodes is expanded first. Whichever predecessor gets there
+    // first claims the parent pointer, so this is the knob that decides which equally short route
+    // an ant ends up committed to. Cell index for the canonical order, this ant's stable
+    // preference otherwise.
+    std::uint64_t order{};
   };
   struct Greater {
     bool operator()(const OpenNode& lhs, const OpenNode& rhs) const {
@@ -108,8 +140,11 @@ PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
       if (lhs.g != rhs.g) {
         return lhs.g > rhs.g;
       }
-      return lhs.index > rhs.index;
+      return lhs.order > rhs.order;
     }
+  };
+  const auto ordering = [bias](const GridPos cell, const std::size_t index) {
+    return bias.key == 0 ? static_cast<std::uint64_t>(index) : preference(bias.key, cell);
   };
 
   constexpr int kInfinity = std::numeric_limits<int>::max();
@@ -120,7 +155,7 @@ PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
   const std::size_t start_index = index_of(start);
   const std::size_t goal_index = index_of(goal);
   costs[start_index] = 0;
-  open.push({heuristic(start, goal), 0, start_index});
+  open.push({heuristic(start, goal), 0, start_index, ordering(start, start_index)});
 
   std::size_t expanded = 0;
   while (!open.empty()) {
@@ -157,7 +192,8 @@ PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
       }
       costs[neighbor_index] = new_cost;
       parents[neighbor_index] = node.index;
-      open.push({new_cost + heuristic(neighbor, goal), new_cost, neighbor_index});
+      open.push({new_cost + heuristic(neighbor, goal), new_cost, neighbor_index,
+                 ordering(neighbor, neighbor_index)});
     }
   }
   return {PathStatus::Unreachable, {}, expanded};

@@ -10,7 +10,7 @@ M4 completes the generation loop. A colony latches **maturity** at 100 living wo
 
 ## Active scope
 
-**Next: T003a — deterministic per-ant route variation.** T006a is complete: excavation plans persistent dig faces that drive three-wide corridors, branch, stair-step around obstacles and widen into chambers on demand, and spoil overflow is accounted for explicitly. T014a is complete: shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector, with the native interaction confirmed by the project owner. Simulation and save formats were unchanged by it. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.
+**Next: T003b — weighted diagonal navigation and fixed-point travel.** T003a is complete: ants that share endpoints no longer share a route, while every route stays shortest. T006a is complete: excavation plans persistent dig faces that drive three-wide corridors, branch, stair-step around obstacles and widen into chambers on demand, and spoil overflow is accounted for explicitly. T014a is complete: shared rendered/picked poses, DPI-safe camera conversion, owned click/drag gestures, modal isolation, Escape/save shortcuts and a responsive inspector, with the native interaction confirmed by the project owner. Simulation and save formats were unchanged by it. See [NEXT_STEPS](NEXT_STEPS.md) and the T014a section below.
 
 Suggested prompt for a smaller model:
 
@@ -26,7 +26,7 @@ Suggested prompt for a smaller model:
 | M2 Living colony | Complete — T005–T007 |
 | M3 Safe incremental slice | Complete — T008–T010 |
 | M4 Complete generation loop | Complete — T011–T013 |
-| M5 Release candidate | In progress — T014a and T006a complete; T014b/c/d open; T015 optimization partial, full performance gate open; T016 partial |
+| M5 Release candidate | In progress — T014a, T006a and T003a complete; T014b/c/d open; T015 optimization partial, full performance gate open; T016 partial |
 
 ## Environment observations
 
@@ -133,6 +133,42 @@ shipped build would have used rather than a source path the player does not have
 
 The `.app` bundle itself, version metadata and the release archive are still open.
 
+### T003a — deterministic per-ant route variation (complete)
+
+Both routers broke ties in a fixed order, so every ant standing on a cell walked home exactly the
+same way and traffic collapsed onto shared lanes. `RouteBias` is one stable key per ant, derived
+from the run seed and the actor id by a hash of its own — it consumes no simulation RNG, so route
+choice cannot shift brood or job outcomes.
+
+- `HomeField::path_home` keeps the single shared distance field. Where several neighbours are
+  equally close to home, the ant picks by its own preference instead of the first in N/E/S/W order.
+- `find_path` biases the **A\* tie-break**, not the neighbour iteration order. Permuting neighbours
+  does nothing: which predecessor claims a cell is decided by pop order, so the ordering value had
+  to move into the open-set comparator. A zero key falls back to cell index, which is the canonical
+  order connectivity checks and fixtures rely on.
+- Variation only ever chooses between options that are already equally good, so no ant takes a
+  detour and a one-cell passage still has exactly one route.
+
+**Verified.** `ctest --preset headless` passes **136/136 in 53.76 s** including the sixty-minute
+soak. Three new route cases: a wide gallery yields more than one distinct route home and outward
+across 32 ant ids while every route stays exactly the field distance; a two-room fixture joined by a
+single corridor still routes all 32; and an unbiased call reproduces the old canonical path exactly.
+`--verify-round-trip` passes at 40,000 ticks on seeds 1/7/42/101/2026, so a mid-route reload still
+continues identically.
+
+Measured on real terrain at 36,000 ticks, seeds 1/7/42: each food source is reached by **5–8
+distinct routes** across 64 ant ids, and cells inside the tunnel network by as many as 64, with
+every sampled route still exactly the shortest length. A source sitting on a one-way surface cell
+still shows a single first step, which is a real bottleneck rather than a failure to vary.
+
+Pacing is unaffected: against the committed T006a build on seed 7, flight moves 1977 s → 1980 s and
+excavated cells 312 → 311.
+
+One brittle test was repaired rather than worked around. `maturity requires workers, births and run
+age together` set the population one short of a threshold and then ticked for two seconds, which
+only held while no egg happened to hatch in that window. It now empties the nursery first, through a
+new `debug_clear_brood` seam, so the boundary under test cannot move underneath it.
+
 ### T006a — persistent dig faces and connected corridors (complete)
 
 Excavation used to rank every diggable cell touching nest air and keep the best eight by distance to
@@ -178,10 +214,15 @@ falls from about 14 cells to 6–8 as digging proceeds, no isolated cell appears
 30 and 60 minutes the maps show several three-wide corridors, stair-stepped diagonals and horizontal
 connectors rather than one cavity.
 
-**Balance held** under buy-cheapest at 72,000 ticks: flight at 31.7–31.9 minutes against the 30–45
-minute target (30.3–30.9 before), first purchase at 2.8–2.9 minutes inside the 2–4 minute target,
-peak workers 172–179, no extinction, starvation or decline on seeds 1/7/42. The full five-seed
-two-policy re-baseline is still T013a's job.
+**Balance held** under buy-cheapest at 72,000 ticks on seeds 1/7/42: flight at 32.3–33.0 minutes
+against the 30–45 minute target (30.3–30.9 before), first purchase at 2.7–2.8 minutes inside the
+2–4 minute target, peak workers 170–177, excavated 312–466 cells, no extinction, starvation or
+decline. The full five-seed two-policy re-baseline is still T013a's job.
+
+An earlier draft of this entry quoted 31.7–31.9 minutes and 898–1046 excavated cells. Those came
+from a build made before the cross-section was given a canonical order, which changes which cell of
+a face each worker takes and therefore everything downstream. The figures above are from the
+committed code.
 
 ### T014a — reliable selection and modal input (complete)
 
@@ -290,7 +331,7 @@ Reviewed at 1440x900 (zoom 4) and at the 1024x640 minimum (zoom 3.2) on Retina. 
 
 ## Open work
 
-Continue with the ordered M5 slices, starting at T003a. The audit in NEXT_STEPS supersedes the old
+Continue with the ordered M5 slices, starting at T003b. The audit in NEXT_STEPS supersedes the old
 next-task order. Two T014a details were reviewed only by reasoning and unit tests, not natively:
 pointer panning with the right or middle button, and the 1024x640 panel scroll.
 

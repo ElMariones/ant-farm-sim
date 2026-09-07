@@ -3,6 +3,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <set>
+#include <vector>
+
 TEST_CASE("starter home and both food sources are connected across one hundred seeds",
           "[terrain][navigation]") {
   for (std::uint64_t seed = 0; seed < 100; ++seed) {
@@ -39,4 +42,79 @@ TEST_CASE("home field follows topology revisions", "[navigation]") {
   terrain.grid.set({terrain.entrance.x, 40}, ant::sim::Material::Soil);
   CHECK(terrain.grid.navigation_revision() > old_revision);
   CHECK(field.path_home(terrain.grid, terrain.source_positions[0]).empty());
+}
+
+TEST_CASE("a wide gallery carries several legal routes, one per ant", "[navigation][routes]") {
+  // An open hall with the nest at one corner: every monotone staircase across it is equally short.
+  ant::sim::Grid grid(ant::sim::Material::Soil);
+  const ant::sim::GridPos home{20, 60};
+  for (int y = 55; y <= 65; ++y) {
+    for (int x = 20; x <= 40; ++x) grid.set({x, y}, ant::sim::Material::Air);
+  }
+  ant::sim::HomeField field;
+  field.rebuild(grid, home);
+  const ant::sim::GridPos far{40, 55};
+
+  std::set<std::vector<ant::sim::GridPos>> home_routes;
+  std::set<std::vector<ant::sim::GridPos>> outward_routes;
+  for (std::uint64_t id = 1; id <= 32; ++id) {
+    const auto bias = ant::sim::route_bias(2026, id);
+    const auto home_route = field.path_home(grid, far, bias);
+    REQUIRE_FALSE(home_route.empty());
+    CHECK(home_route.back() == home);
+    // Variation only ever picks between equally short choices: no ant takes a detour.
+    CHECK(home_route.size() == static_cast<std::size_t>(field.distance(far)));
+    home_routes.insert(home_route);
+
+    const auto outward = ant::sim::find_path(grid, home, far, 4096, bias);
+    REQUIRE(outward.status == ant::sim::PathStatus::Complete);
+    CHECK(outward.cells.size() == static_cast<std::size_t>(field.distance(far)));
+    outward_routes.insert(outward.cells);
+  }
+  CHECK(home_routes.size() > 1);
+  CHECK(outward_routes.size() > 1);
+
+  // The same ant on the same colony always walks the same way.
+  const auto repeat = ant::sim::route_bias(2026, 5);
+  CHECK(field.path_home(grid, far, repeat) == field.path_home(grid, far, repeat));
+  CHECK(ant::sim::find_path(grid, home, far, 4096, repeat).cells ==
+        ant::sim::find_path(grid, home, far, 4096, repeat).cells);
+  // A different colony seed gives the same ant id a different preference.
+  CHECK(ant::sim::route_bias(2026, 5).key != ant::sim::route_bias(7, 5).key);
+}
+
+TEST_CASE("a one-cell passage still carries every ant", "[navigation][routes]") {
+  // Two rooms joined by a single corridor: there is exactly one legal route and no ant may miss it.
+  ant::sim::Grid grid(ant::sim::Material::Soil);
+  const ant::sim::GridPos home{20, 60};
+  for (int x = 20; x <= 24; ++x) grid.set({x, 60}, ant::sim::Material::Air);
+  for (int x = 25; x <= 30; ++x) grid.set({x, 60}, ant::sim::Material::Air);
+  for (int x = 31; x <= 35; ++x) grid.set({x, 60}, ant::sim::Material::Air);
+  ant::sim::HomeField field;
+  field.rebuild(grid, home);
+  const ant::sim::GridPos far{35, 60};
+
+  for (std::uint64_t id = 1; id <= 32; ++id) {
+    const auto bias = ant::sim::route_bias(11, id);
+    const auto route = field.path_home(grid, far, bias);
+    REQUIRE_FALSE(route.empty());
+    CHECK(route.size() == static_cast<std::size_t>(field.distance(far)));
+    CHECK(route.back() == home);
+    CHECK(ant::sim::find_path(grid, home, far, 4096, bias).status ==
+          ant::sim::PathStatus::Complete);
+  }
+}
+
+TEST_CASE("an unbiased route keeps the canonical order fixtures rely on", "[navigation][routes]") {
+  ant::sim::Grid grid(ant::sim::Material::Soil);
+  const ant::sim::GridPos home{20, 60};
+  for (int y = 58; y <= 62; ++y) {
+    for (int x = 20; x <= 30; ++x) grid.set({x, y}, ant::sim::Material::Air);
+  }
+  ant::sim::HomeField field;
+  field.rebuild(grid, home);
+  const auto plain = field.path_home(grid, {30, 58});
+  CHECK(plain == field.path_home(grid, {30, 58}, ant::sim::RouteBias{}));
+  CHECK(ant::sim::find_path(grid, home, {30, 58}).cells ==
+        ant::sim::find_path(grid, home, {30, 58}, 4096, ant::sim::RouteBias{}).cells);
 }
