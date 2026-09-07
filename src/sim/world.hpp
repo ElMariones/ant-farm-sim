@@ -22,6 +22,8 @@ struct WorldSnapshot;
 inline constexpr std::size_t kMaxFoodSources = 8;
 // How close a scout must pass to notice a site.
 inline constexpr int kDiscoveryReach = 6;
+// The queen is heavy and unhurried.
+inline constexpr int kQueenSpeed = 2;
 // How long the colony keeps steering foragers onto a freshly discovered site.
 inline constexpr Tick kRecruitmentTicks = 90 * kTicksPerSecond;
 // A site nobody has found rots away rather than holding a slot for ever.
@@ -213,6 +215,7 @@ public:
 
 private:
   void spawn_queen();
+  void process_queen(int& path_budget);
   void spawn_workers();
   void spawn_food_sources();
   void place_food_source();
@@ -246,7 +249,8 @@ private:
   // False when the colony knows of nowhere left to forage, which is what sends a worker scouting.
   [[nodiscard]] bool choose_source(entt::entity entity, int& path_budget);
   void refresh_path(entt::entity entity, int& path_budget);
-  bool move_one_tick(entt::entity entity);
+  // Cells per second is the caller's choice: a worker trots, the queen does not.
+  bool move_one_tick(entt::entity entity, int cells_per_second = 6);
   void arrive(entt::entity entity, int& path_budget);
   void release_reservation(Forager& forager);
   [[nodiscard]] std::int64_t& store_for(Nutrient nutrient);
@@ -319,6 +323,8 @@ private:
   int nursery_capacity_{12};
   std::uint64_t spoil_mound_{};
   Tick next_laying_{240};
+  // When the queen may next choose somewhere to walk.
+  Tick queen_settle_{};
   Tick queen_starvation_{};
   bool queen_alive_{true};
   bool decline_{};

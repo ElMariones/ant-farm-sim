@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <limits>
 #include "sim/rng.hpp"
+#include "sim/terrain_generation.hpp"
 
 #include <nlohmann/json.hpp>
 #include <map>
@@ -117,9 +118,11 @@ json actor_json(const sim::ActorState& a) {
   json result={{"id",a.identity.id},{"kind",enum_value(a.ant.kind)},{"worker",a.worker},
     {"position",{{"x",a.position.x_subcells},{"y",a.position.y_subcells},{"previous_x",a.position.previous_x_subcells},{"previous_y",a.position.previous_y_subcells}}},
     {"cargo",{{"kind",enum_value(a.cargo.kind)},{"nutrient",enum_value(a.cargo.nutrient)},{"amount",a.cargo.amount},{"entity_id",a.cargo.entity_id}}}};
-  if (a.worker) {
+  if (a.worker || a.ant.kind == sim::AntKind::Queen) {
     json path=json::array(); for (const auto p:a.movement.path) path.push_back(position_json(p));
     result["movement"]={{"path",std::move(path)},{"next_cell",a.movement.next_cell},{"path_revision",a.movement.path_revision},{"speed_residual",a.movement.speed_residual},{"path_valid",a.path_valid}};
+  }
+  if (a.worker) {
     result["forager"]={{"state",enum_value(a.forager.state)},{"source_id",a.forager.source_id},{"reserved_amount",a.forager.reserved_amount},{"reservation_expiry",a.forager.reservation_expiry},{"retry_after",a.forager.retry_after},{"store_cell",position_json(a.forager.store_cell)},{"scout_target",position_json(a.forager.scout_target)}};
     result["mind"]={{"task",enum_value(a.mind.task)},{"committed_until",a.mind.committed_until},{"thresholds",a.mind.thresholds},{"target",position_json(a.mind.target)},{"has_target",a.mind.has_target},{"action_ticks",a.mind.action_ticks}};
     result["life"]={{"age",a.life.age},{"lifespan",a.life.lifespan},{"starvation",a.life.starvation}};
@@ -134,8 +137,10 @@ sim::ActorState read_actor(const json& j) {
   a.identity.id=j.at("id").get<sim::EntityId>(); a.ant.kind=read_enum<sim::AntKind>(j.at("kind"),2,"ant kind"); a.worker=j.at("worker").get<bool>();
   const auto& p=j.at("position"); a.position={p.at("x").get<std::int32_t>(),p.at("y").get<std::int32_t>(),p.at("previous_x").get<std::int32_t>(),p.at("previous_y").get<std::int32_t>()};
   const auto& c=j.at("cargo"); a.cargo={read_enum<sim::CargoKind>(c.at("kind"),3,"cargo kind"),read_enum<sim::Nutrient>(c.at("nutrient"),1,"cargo nutrient"),c.at("amount").get<std::int64_t>(),c.at("entity_id").get<sim::EntityId>()};
-  if (a.worker) {
+  if (j.contains("movement")) {
     const auto& m=j.at("movement"); for(const auto& item:m.at("path")) a.movement.path.push_back(read_position(item)); a.movement.next_cell=m.at("next_cell").get<std::size_t>(); a.movement.path_revision=m.at("path_revision").get<std::uint64_t>(); a.path_valid=m.value("path_valid",true); a.movement.speed_residual=m.at("speed_residual").get<int>();
+  }
+  if (a.worker) {
     const auto& f=j.at("forager"); a.forager={read_enum<sim::ForageState>(f.at("state"),5,"forage state"),f.at("source_id").get<sim::EntityId>(),f.at("reserved_amount").get<std::int64_t>(),f.at("reservation_expiry").get<sim::Tick>(),f.at("retry_after").get<sim::Tick>(),read_position(f.at("store_cell")),read_position(f.at("scout_target"))};
     const auto& mind=j.at("mind"); a.mind.task=read_enum<sim::Task>(mind.at("task"),4,"task"); a.mind.committed_until=mind.at("committed_until").get<sim::Tick>(); a.mind.thresholds=mind.at("thresholds").get<std::array<std::uint16_t,4>>(); a.mind.target=read_position(mind.at("target")); a.mind.has_target=mind.at("has_target").get<bool>(); a.mind.action_ticks=mind.at("action_ticks").get<int>();
     const auto& life=j.at("life"); a.life={life.at("age").get<sim::Tick>(),life.at("lifespan").get<sim::Tick>(),life.at("starvation").get<sim::Tick>()};
@@ -163,7 +168,7 @@ json world_json(const sim::WorldSnapshot& w) {
     {"task_diagnostics",{{"stimuli",w.task_diagnostics.stimuli},{"workers_by_task",w.task_diagnostics.workers_by_task}}},
     {"rooms",std::move(rooms)},{"next_source_spawn",w.next_source_spawn},{"recruiting_source",w.recruiting_source},{"recruit_until",w.recruit_until},{"brood",std::move(brood)},{"corpses",std::move(corpses)},{"dropped_food",std::move(dropped)},{"granary",std::move(granary)},{"actors",std::move(actors)},
     {"spoil_mound",w.spoil_mound},{"starting_nest_air",w.starting_nest_air},{"connected_nest_air",w.connected_nest_air},{"nursery_capacity",w.nursery_capacity},
-    {"next_laying",w.next_laying},{"queen_starvation",w.queen_starvation},{"queen_alive",w.queen_alive},{"decline",w.decline},{"extinct",w.extinct},
+    {"next_laying",w.next_laying},{"queen_settle",w.queen_settle},{"queen_starvation",w.queen_starvation},{"queen_alive",w.queen_alive},{"decline",w.decline},{"extinct",w.extinct},
     {"focus",enum_value(w.focus)},{"adaptation_levels",w.adaptation_levels},
     {"traits",{{"vigor_tier",w.traits.vigor_tier},{"industry_tier",w.traits.industry_tier}}},
     {"mature",w.mature},{"egg_assignment_counter",w.egg_assignment_counter}};
@@ -187,7 +192,7 @@ sim::WorldSnapshot read_world(const json& j) {
   if(j.contains("granary")) for(const auto& item:j.at("granary")) w.granary.push_back({read_position(item.at("position")),read_enum<sim::Nutrient>(item.at("nutrient"),1,"nutrient"),item.at("amount").get<std::int64_t>()});
   for(const auto& item:j.at("actors")) w.actors.push_back(read_actor(item));
   w.spoil_mound=j.at("spoil_mound").get<std::uint64_t>(); w.starting_nest_air=j.at("starting_nest_air").get<int>(); w.connected_nest_air=j.at("connected_nest_air").get<int>(); w.nursery_capacity=j.at("nursery_capacity").get<int>();
-  w.next_laying=j.at("next_laying").get<sim::Tick>(); w.queen_starvation=j.at("queen_starvation").get<sim::Tick>(); w.queen_alive=j.at("queen_alive").get<bool>(); w.decline=j.at("decline").get<bool>(); w.extinct=j.at("extinct").get<bool>(); w.focus=read_enum<sim::Focus>(j.at("focus"),3,"focus"); w.adaptation_levels=j.at("adaptation_levels").get<std::array<std::uint8_t,4>>();
+  w.next_laying=j.at("next_laying").get<sim::Tick>(); w.queen_settle=j.value("queen_settle",sim::Tick{0}); w.queen_starvation=j.at("queen_starvation").get<sim::Tick>(); w.queen_alive=j.at("queen_alive").get<bool>(); w.decline=j.at("decline").get<bool>(); w.extinct=j.at("extinct").get<bool>(); w.focus=read_enum<sim::Focus>(j.at("focus"),3,"focus"); w.adaptation_levels=j.at("adaptation_levels").get<std::array<std::uint8_t,4>>();
   const auto& t=j.at("traits"); w.traits={t.at("vigor_tier").get<std::uint8_t>(),t.at("industry_tier").get<std::uint8_t>()};
   w.mature=j.at("mature").get<bool>(); w.egg_assignment_counter=j.at("egg_assignment_counter").get<std::uint64_t>();
   return w;
@@ -203,7 +208,7 @@ void validate_world(const sim::WorldSnapshot& w) {
   std::map<sim::EntityId,std::int64_t> reservations;
   for(const auto& source:w.sources){add(source.id); reservations[source.id]=0; if(source.amount<0||source.capacity<=0||source.amount>source.capacity||source.reserved<0||source.reserved>source.amount||!passable(source.position)) throw std::invalid_argument("invalid food source");}
   bool queen=false; sim::EntityId previous=0;
-  for(const auto& actor:w.actors){add(actor.identity.id); if(actor.identity.id<=previous) throw std::invalid_argument("actors are not in stable id order"); previous=actor.identity.id; if(!passable(actor.position.cell())||actor.cargo.amount<0||actor.worker!=(actor.ant.kind==sim::AntKind::Worker)) throw std::invalid_argument("invalid actor state"); if(!actor.worker){if(actor.ant.kind==sim::AntKind::Queen){if(queen) throw std::invalid_argument("multiple queens");queen=true;}continue;} if(actor.movement.next_cell>actor.movement.path.size()||actor.movement.path.size()>cells||actor.movement.speed_residual<0||actor.movement.speed_residual>=sim::kTicksPerSecond) throw std::invalid_argument("invalid movement state"); if(actor.path_valid) for(const auto p:actor.movement.path) if(!passable(p)) throw std::invalid_argument("current path crosses an impassable cell"); if(actor.forager.reserved_amount<0) throw std::invalid_argument("invalid reservation"); if(actor.forager.reserved_amount>0){const auto slot=reservations.find(actor.forager.source_id); if(slot==reservations.end()) throw std::invalid_argument("reservation names a site that is gone"); slot->second+=actor.forager.reserved_amount;}}
+  for(const auto& actor:w.actors){add(actor.identity.id); if(actor.identity.id<=previous) throw std::invalid_argument("actors are not in stable id order"); previous=actor.identity.id; if(!passable(actor.position.cell())||actor.cargo.amount<0||actor.worker!=(actor.ant.kind==sim::AntKind::Worker)) throw std::invalid_argument("invalid actor state"); if(actor.movement.next_cell>actor.movement.path.size()||actor.movement.path.size()>cells||actor.movement.speed_residual<0||actor.movement.speed_residual>=sim::kTicksPerSecond) throw std::invalid_argument("invalid movement state"); if(actor.path_valid) for(const auto p:actor.movement.path) if(!passable(p)) throw std::invalid_argument("current path crosses an impassable cell"); if(!actor.worker){if(actor.ant.kind==sim::AntKind::Queen){if(queen) throw std::invalid_argument("multiple queens");queen=true;}continue;} if(actor.forager.reserved_amount<0) throw std::invalid_argument("invalid reservation"); if(actor.forager.reserved_amount>0){const auto slot=reservations.find(actor.forager.source_id); if(slot==reservations.end()) throw std::invalid_argument("reservation names a site that is gone"); slot->second+=actor.forager.reserved_amount;}}
   if(queen!=w.queen_alive) throw std::invalid_argument("queen state mismatch");
   for(const auto& source:w.sources) if(reservations[source.id]!=source.reserved) throw std::invalid_argument("source reservation mismatch");
   for(const auto& room:w.rooms) if(!sim::within_envelope(room.centre,w.home)) throw std::invalid_argument("room lies outside the excavation envelope");
@@ -277,25 +282,23 @@ void migrate_v2_to_v3(json& document) {
     return static_cast<sim::Material>(
         terrain[static_cast<std::size_t>(cell.y * sim::Grid::kWidth + cell.x)].get<int>());
   };
+  // The founding room set for this very seed, so a migrated colony is given the same chambers a
+  // colony of that seed is founded with rather than a guess that might land in solid ground.
   json rooms = json::array();
-  const auto room = [&](const int dx, const int dy, const sim::RoomKind kind) {
-    const sim::Room shape{{home.x + dx, home.y + dy},
-                          static_cast<std::uint8_t>(sim::kRoomStartRadius), kind, false};
+  for (const sim::Room& shape : sim::generate_terrain(seed).rooms) {
     bool carved = true;
-    for (int y = -sim::kRoomStartRadius; y <= sim::kRoomStartRadius && carved; ++y) {
-      for (int x = -sim::kRoomStartRadius; x <= sim::kRoomStartRadius; ++x) {
+    for (int y = -shape.reach(); y <= shape.reach() && carved; ++y) {
+      for (int x = -shape.reach(); x <= shape.reach(); ++x) {
         const sim::GridPos cell{shape.centre.x + x, shape.centre.y + y};
         if (!shape.contains(cell) || !sim::within_envelope(cell, home)) continue;
         if (sim::is_diggable(material_at(cell))) { carved = false; break; }
       }
     }
     rooms.push_back({{"centre", json::array({shape.centre.x, shape.centre.y})},
-                     {"radius", sim::kRoomStartRadius},
-                     {"kind", enum_value(kind)},
+                     {"radius", shape.radius},
+                     {"kind", enum_value(shape.kind)},
                      {"complete", carved}});
-  };
-  room(0, 16, sim::RoomKind::Nursery);
-  room(-18, 10, sim::RoomKind::Granary);
+  }
   world["rooms"] = std::move(rooms);
 
   for (json& actor : world.at("actors")) {

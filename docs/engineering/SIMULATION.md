@@ -86,11 +86,18 @@ No nest/food omniscience via pheromones; no smart deletion of failed trails. Sta
 The colony digs for a reason. Every excavation belongs to one **room** it has decided it needs and
 to the corridor that reaches it, so a finished nest is chambers joined by passages rather than
 wandering lines. A room is a centre, a radius, a kind (brood or granary), and whether it is
-finished. Rooms are the whole reason the colony excavates, so they are serialized with the run and
+finished. Chambers are small — `kRoomStartRadius` 3, widened to at most `kRoomMaxRadius` 5, up to
+`kMaxRooms` of them — so a colony ends up with many pockets joined by passages rather than a few
+caverns. They are not discs either: each room bulges or pinches by a cell in each of eight
+directions, decided once from where its centre sits, so the same cell always answers the same way
+and widening grows the same shape outward. Loop bounds use `Room::reach()`, a cell past the radius,
+because a room may bulge past it. Rooms are the whole reason the colony excavates, so they are serialized with the run and
 contribute to the canonical hash.
 
 Demand is checked once a simulated second. Half full is a reason to plan: brood at half the cradles
-or a store at half its capacity. Three quarters full is a reason to hurry, which is the only
+or a store at half its capacity. A colony also keeps roughly one cradle for every two workers, so a
+growing colony opens more brood rooms as it grows rather than living out of the one it was founded
+with. Three quarters full is a reason to hurry, which is the only
 difference the excavation stimulus sees — a founding colony should be out finding food, not all
 underground. When the colony wants space it first **widens** the nearest room of that kind by one
 cell of radius, up to `kRoomMaxRadius`; only when that room is capped, crowded or would leave the
@@ -253,5 +260,9 @@ reach a fraction of it. A forager holds its assigned heap for the whole delivery
 only counts as a destination while the nutrient still has cells to spare — otherwise the last free
 cells could be promised to more ants than the chambers can hold.
 
-The queen lays where she stands. A nurse carries each egg to a free cradle in a brood room, and
-fetches back anything she finds lying outside one.
+The queen is not rooted to one cell. She settles for fourteen to forty seconds, then walks — one
+trip in three to a cradle in a brood room, otherwise a turn about her own chamber — at
+`kQueenSpeed` cells a second, which is a third of a worker's pace. She lays where she stands, so
+where the next egg lands depends on where she happens to be, and a nurse carries it on to a free
+cradle from there and fetches back anything she finds lying outside one. Her walk is part of the
+run: her path and the tick she may next choose a destination are both saved.

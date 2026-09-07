@@ -22,11 +22,13 @@ inline constexpr int kDigRadius = 96;
 // Nurses have to walk to the brood, so brood rooms stay within reach of the queen.
 inline constexpr int kNurseryReach = 46;
 // A room opens at this radius and may be widened to this one before the colony sites another.
-inline constexpr int kRoomStartRadius = 5;
-inline constexpr int kRoomMaxRadius = 8;
+// Chambers are small: a colony ends up with many pockets joined by passages rather than a few
+// caverns, which is what an ant farm actually looks like.
+inline constexpr int kRoomStartRadius = 3;
+inline constexpr int kRoomMaxRadius = 5;
 // Corridor cross-section, in cells, measured across its run.
 inline constexpr int kCorridorWidth = 3;
-inline constexpr std::size_t kMaxRooms = 14;
+inline constexpr std::size_t kMaxRooms = 26;
 // Workers that may cut the same project at once.
 inline constexpr int kDiggersPerProject = 4;
 
@@ -40,7 +42,11 @@ struct Room {
   // stays, and the room is finished around it.
   bool complete{};
 
+  // Rooms are not discs. Each one bulges and pinches by a cell per direction, decided once from
+  // where it sits, so a chamber reads as a pocket somebody dug rather than a stamped circle.
   [[nodiscard]] bool contains(GridPos cell) const;
+  // The furthest a cell of this room can be from its centre, for loop bounds.
+  [[nodiscard]] int reach() const { return radius + 1; }
 
   friend bool operator==(const Room&, const Room&) = default;
 };

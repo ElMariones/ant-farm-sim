@@ -52,7 +52,22 @@ std::vector<GridPos> corridor_centreline(const Grid& grid, const GridPos home,
 bool Room::contains(const GridPos cell) const {
   const int dx = cell.x - centre.x;
   const int dy = cell.y - centre.y;
-  return dx * dx + dy * dy <= static_cast<int>(radius) * static_cast<int>(radius);
+  const int squared = dx * dx + dy * dy;
+  const int base = static_cast<int>(radius);
+  if (squared <= (base - 1) * (base - 1)) return true;      // the core is always inside
+  if (squared > (base + 1) * (base + 1)) return false;      // and nothing reaches past the rim
+  // Eight directions, each given its own bulge or pinch by where the room sits. The offset depends
+  // only on the room, so the same cell always answers the same way and widening grows the same
+  // shape outward.
+  const unsigned sector = (dy > 0 ? 4U : 0U) | (dx > 0 ? 2U : 0U) |
+                          (std::abs(dx) > std::abs(dy) ? 1U : 0U);
+  const std::uint64_t noise = mix_seed(static_cast<std::uint64_t>(centre.x) * 0x9E3779B9ULL ^
+                                       static_cast<std::uint64_t>(centre.y) * 0x85EBCA6BULL ^
+                                       (static_cast<std::uint64_t>(sector) << 40U));
+  // Mostly the plain radius, sometimes a cell more or less.
+  const int offset = static_cast<int>(noise % 4ULL) == 0 ? 1 : static_cast<int>(noise % 4ULL) == 1 ? -1 : 0;
+  const int limit = base + offset;
+  return squared <= limit * limit;
 }
 
 bool within_envelope(const GridPos cell, const GridPos home) {
@@ -103,8 +118,8 @@ std::vector<GridPos> NestPlan::work_cells(const Grid& grid, const GridPos home) 
 
   // Then the room itself, opening outward from where the corridor arrives.
   std::vector<GridPos> chamber;
-  for (int dy = -room.radius; dy <= room.radius; ++dy) {
-    for (int dx = -room.radius; dx <= room.radius; ++dx) {
+  for (int dy = -room.reach(); dy <= room.reach(); ++dy) {
+    for (int dx = -room.reach(); dx <= room.reach(); ++dx) {
       const GridPos cell{room.centre.x + dx, room.centre.y + dy};
       if (!room.contains(cell) || !within_envelope(cell, home)) continue;
       if (!is_diggable(grid.at(cell))) continue;
@@ -139,10 +154,10 @@ bool NestPlan::site_is_clear(const Grid& grid, const GridPos home, const GridPos
   if (kind == RoomKind::Nursery && manhattan(centre, home) > kNurseryReach) return false;
   int blocked = 0;
   int total = 0;
-  for (int dy = -radius - 1; dy <= radius + 1; ++dy) {
-    for (int dx = -radius - 1; dx <= radius + 1; ++dx) {
+  for (int dy = -radius - 2; dy <= radius + 2; ++dy) {
+    for (int dx = -radius - 2; dx <= radius + 2; ++dx) {
       const GridPos cell{centre.x + dx, centre.y + dy};
-      if (dx * dx + dy * dy > (radius + 1) * (radius + 1)) continue;
+      if (dx * dx + dy * dy > (radius + 2) * (radius + 2)) continue;
       if (!within_envelope(cell, home)) return false;
       ++total;
       if (!is_diggable(grid.at(cell)) && grid.at(cell) != Material::Air) ++blocked;
@@ -168,9 +183,9 @@ bool NestPlan::widen(const GridPos home, const RoomKind kind) {
     return &other != best && manhattan(best->centre, other.centre) < widened + other.radius + 3;
   });
   if (crowded) return false;
-  for (int dy = -widened; dy <= widened; ++dy) {
-    for (int dx = -widened; dx <= widened; ++dx) {
-      if (dx * dx + dy * dy > widened * widened) continue;
+  for (int dy = -widened - 1; dy <= widened + 1; ++dy) {
+    for (int dx = -widened - 1; dx <= widened + 1; ++dx) {
+      if (dx * dx + dy * dy > (widened + 1) * (widened + 1)) continue;
       if (!within_envelope({best->centre.x + dx, best->centre.y + dy}, home)) return false;
     }
   }
@@ -218,8 +233,8 @@ void NestPlan::update(const Grid& grid, const GridPos home, const std::uint64_t 
     if (room.complete) continue;
     const bool corridor_open = corridor_centreline(grid, home, room.centre).empty();
     bool carved = true;
-    for (int dy = -room.radius; dy <= room.radius && carved; ++dy) {
-      for (int dx = -room.radius; dx <= room.radius; ++dx) {
+    for (int dy = -room.reach(); dy <= room.reach() && carved; ++dy) {
+      for (int dx = -room.reach(); dx <= room.reach(); ++dx) {
         const GridPos cell{room.centre.x + dx, room.centre.y + dy};
         if (!room.contains(cell) || !within_envelope(cell, home)) continue;
         if (is_diggable(grid.at(cell))) { carved = false; break; }

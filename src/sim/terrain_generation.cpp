@@ -26,7 +26,7 @@ void carve_ellipse(Grid& grid, const GridPos centre, const double half_width,
 }
 
 void carve_room(Grid& grid, const Room& room) {
-  const int reach = room.radius;
+  const int reach = room.reach();
   for (int dy = -reach; dy <= reach; ++dy) {
     for (int dx = -reach; dx <= reach; ++dx) {
       const GridPos cell{room.centre.x + dx, room.centre.y + dy};
@@ -125,10 +125,13 @@ GeneratedTerrain generate_terrain(const std::uint64_t seed) {
       grid.set({x, y}, Material::Air);
     }
   }
-  carve_ellipse(grid, generated.home, 6.0, 4.0);
+  carve_ellipse(grid, generated.home, 5.0, 3.5);
+  // A founding nest is already a handful of small chambers: one for the brood and three for stores.
   generated.rooms = {
-      {{generated.home.x, generated.home.y + 16}, kRoomStartRadius, RoomKind::Nursery, true},
-      {{generated.home.x - 18, generated.home.y + 10}, kRoomStartRadius, RoomKind::Granary, true}};
+      {{generated.home.x, generated.home.y + 12}, kRoomStartRadius, RoomKind::Nursery, true},
+      {{generated.home.x - 13, generated.home.y + 8}, kRoomStartRadius, RoomKind::Granary, true},
+      {{generated.home.x + 13, generated.home.y + 8}, kRoomStartRadius, RoomKind::Granary, true},
+      {{generated.home.x - 4, generated.home.y + 19}, kRoomStartRadius, RoomKind::Granary, true}};
   for (const Room& room : generated.rooms) {
     carve_passage(grid, generated.home, room.centre);
     carve_room(grid, room);

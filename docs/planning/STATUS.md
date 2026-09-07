@@ -8,7 +8,33 @@ Updated: 2026-09-07.
 
 M4 completes the generation loop. A colony latches **maturity** at 100 living workers, 150 worker births and 12 simulated minutes; after that one egg in five becomes a **winged queen**, capped at ten live and developing combined. With three winged queens, a living founding queen and an unassisted run, the player can send a **nuptial flight**, which pays Genetic Legacy through a single committed profile revision carrying an immutable receipt. Between colonies, Legacy buys eight permanent trait tiers across Vigor and Industry, and founding the next colony applies the owned traits exactly once.
 
-## Latest session — T014g, presentation polish
+## Latest session — T014h
+
+**A colony, not a few caverns.** Chambers shrank from radius 5-8 to 3-5 and the cap rose to
+twenty-six, so a mature nest is a cluster of ten or more small pockets off the shaft rather than
+three or four big discs. None of them is a circle any more: each room bulges or pinches by a cell in
+each of eight directions, decided once from where its centre sits, so the shape is stable, survives
+widening, and is the same for the simulation, the save file and the renderer. A colony also keeps
+roughly a cradle for every two workers, so it opens more brood rooms as it grows. A founding nest
+now comes with one brood room and three granaries instead of one of each.
+
+**The queen walks.** She settles for fourteen to forty seconds, then makes for a cradle in a brood
+room or takes a turn about her own chamber, at a third of a worker's pace. She lays where she
+stands, so a nurse has to carry each egg on from wherever she happened to be. Her path and her next
+departure are saved with the run, so a restored colony continues her walk rather than restarting it.
+
+Verified on this machine (Apple Silicon macOS, Apple Clang 21):
+
+- `./build/dev/ant_tests`: **pass, 40,537 assertions in 136 test cases**.
+- `ant_headless --verify-round-trip` at 20,000 ticks on seeds 42, 7, 101 and 2026.
+- Sixty simulated minutes on three seeds: 138-150 workers, 268-274 births, 128-137 deaths, no
+  extinctions.
+- Three seeds against both scenario policies: flight at 32.5-32.9 minutes buying and 40.7-42.2 not,
+  first purchase at 156-161 s — all inside the ECONOMY targets.
+- Native captures at 37 and 50 simulated minutes, plus a close-up showing the queen out of her
+  chamber beside the brood.
+
+## Earlier session — T014g, presentation polish
 
 **The simulation is untouched.** This session changed only the renderer, the interface layout, one
 read-only helper on the view and the opening zoom, so pacing and balance are exactly as the previous

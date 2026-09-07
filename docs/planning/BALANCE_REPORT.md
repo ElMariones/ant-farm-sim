@@ -207,3 +207,26 @@ faults surfaced while measuring, and both are fixed at the owning layer rather t
   budget, so the last free cells could be promised to more ants than the chambers held. The store
   then exceeded its capacity and the world invariant failed at tick 32,601. Deposits are now bounded
   by the budget as well as by the cell.
+
+## T014h re-check — small irregular chambers and a queen who walks
+
+Measured 2026-09-07 after rooms shrank to radius 3-5, gained an eight-direction bulge, and the queen
+started walking her nest. Release build, Apple Silicon macOS, three seeds against both policies:
+
+| Seed | Policy | Flight (s) | Maturity (s) | First buy (s) | Peak | Deaths | Cells dug |
+|---|---|---|---|---|---|---|---|
+| 1 | buy | 1958 | 1643 | 158 | 176 | 14 | 332 |
+| 1 | none | 2502 | 2040 | — | 147 | 42 | 308 |
+| 42 | buy | 1950 | 1636 | 156 | 178 | 11 | 340 |
+| 42 | none | 2439 | 1975 | — | 152 | 38 | 269 |
+| 101 | buy | 1971 | 1650 | 161 | 174 | 15 | 339 |
+| 101 | none | 2530 | 2057 | — | 147 | 48 | 299 |
+
+Flight lands at 32.5-32.9 minutes buying and 40.7-42.2 not, both inside ECONOMY's 30-45 minute
+target, and first investment at 156-161 s inside the 2-4 minute one. Peak population and deaths are
+unchanged. No run declines or goes extinct. Sixty simulated minutes on three seeds gives 138-150
+workers, 268-274 births and 128-137 deaths, matching the previous measurement.
+
+Smaller chambers cost slightly fewer cells for the same storage, because a small room is more corridor
+per cell but far less unused floor: a mature colony now holds ten or more granaries instead of three
+or four large ones.

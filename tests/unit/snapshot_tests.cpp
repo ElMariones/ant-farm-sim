@@ -3,6 +3,8 @@
 #include "persistence/profile_codec.hpp"
 #include "sim/snapshot.hpp"
 
+#include "sim/terrain_generation.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -401,9 +403,14 @@ TEST_CASE("a schema 1 profile migrates forward and keeps its colony",
   // it already dug has the space for them.
   CHECK_FALSE(world.sources.empty());
   for (const auto& source : world.sources) CHECK(source.known);
-  REQUIRE(world.rooms.size() == 2);
-  CHECK(world.rooms[0].kind == ant::sim::RoomKind::Nursery);
-  CHECK(world.rooms[1].kind == ant::sim::RoomKind::Granary);
+  // The founding room set for the profile's own seed, opened where the ground it already dug has
+  // the space for them.
+  REQUIRE(world.rooms.size() ==
+          ant::sim::generate_terrain(world.seed).rooms.size());
+  CHECK(world.rooms.front().kind == ant::sim::RoomKind::Nursery);
+  CHECK(std::any_of(world.rooms.begin(), world.rooms.end(), [](const ant::sim::Room& room) {
+    return room.kind == ant::sim::RoomKind::Granary;
+  }));
   for (const auto& room : world.rooms) CHECK(room.complete);
 
   // The migrated colony is still the same colony: same moment, same ground, same ants, same food.

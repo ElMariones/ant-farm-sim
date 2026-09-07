@@ -60,6 +60,7 @@ struct WorldSnapshot {
   int connected_nest_air{};
   int nursery_capacity{};
   Tick next_laying{};
+  Tick queen_settle{};
   Tick queen_starvation{};
   bool queen_alive{};
   bool decline{};

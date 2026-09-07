@@ -592,7 +592,7 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
   std::vector<std::uint8_t> room_of(
       static_cast<std::size_t>(view.grid_width * view.grid_height), 0);
   for (const sim::Room& room : view.rooms) {
-    const int reach = room.radius;
+    const int reach = room.reach();
     for (int dy = -reach; dy <= reach; ++dy) {
       for (int dx = -reach; dx <= reach; ++dx) {
         const sim::GridPos cell{room.centre.x + dx, room.centre.y + dy};

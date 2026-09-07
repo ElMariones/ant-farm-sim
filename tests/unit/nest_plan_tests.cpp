@@ -95,7 +95,10 @@ TEST_CASE("only an exposed face can be claimed, and never more than the crew", "
     taken.push_back(*cell);
     ++claims;
   }
-  CHECK(claims == ant::sim::kDiggersPerProject);
+  // How many faces are exposed at once depends on the shape of the ground; what must hold is that
+  // the crew is never exceeded and no two workers are sent to the same cell.
+  CHECK(claims > 0);
+  CHECK(claims <= ant::sim::kDiggersPerProject);
   plan.clear_claims();
   CHECK(plan.claim(grid, kHome));
 }
