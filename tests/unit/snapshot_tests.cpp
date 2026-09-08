@@ -474,3 +474,56 @@ TEST_CASE("clearing a route resets its cursor", "[world][navigation][persistence
   CHECK(decoded.profile.has_value());
   CHECK(decoded.error.empty());
 }
+
+TEST_CASE("passage intent survives saving midway through excavation", "[nest-network][snapshot]") {
+  auto session = busy_session(42, 1200);
+  REQUIRE_FALSE(session.world().passages().empty());
+  const auto document = ant::persistence::encode_profile(ant::persistence::make_new_profile(session));
+  const auto decoded = ant::persistence::decode_profile(document);
+  REQUIRE(decoded.profile);
+  auto restored = ant::game::Session::restore(*decoded.profile->run);
+  CHECK(restored.world().passages() == session.world().passages());
+  session.step_ticks(1200);
+  restored.step_ticks(1200);
+  CHECK(restored.world().canonical_hash() == session.world().canonical_hash());
+}
+
+TEST_CASE("schema three migrates its terrain without inventing excavated passages", "[nest-network][snapshot]") {
+  auto session = busy_session(7, 400);
+  json old = json::parse(ant::persistence::encode_profile(ant::persistence::make_new_profile(session)));
+  old["schema_version"] = 3;
+  old["run"]["world"].erase("passages");
+  auto decoded = ant::persistence::decode_profile(old.dump());
+  REQUIRE(decoded.profile);
+  CHECK(decoded.profile->schema_version == 4);
+  CHECK(decoded.profile->run->world.terrain == session.world().snapshot().terrain);
+  CHECK(decoded.profile->run->world.passages.empty());
+  auto migrated = ant::game::Session::restore(*decoded.profile->run);
+  migrated.step_ticks(40);
+  CHECK(migrated.world().invariant_holds());
+  const auto saved = ant::persistence::decode_profile(ant::persistence::encode_profile(
+      ant::persistence::make_new_profile(migrated)));
+  REQUIRE(saved.profile);
+  auto resumed = ant::game::Session::restore(*saved.profile->run);
+  migrated.step_ticks(400);
+  resumed.step_ticks(400);
+  CHECK(migrated.world().canonical_hash() == resumed.world().canonical_hash());
+}
+
+TEST_CASE("invalid passage geometry is rejected before adopting a profile", "[nest-network][snapshot]") {
+  auto session = busy_session(42, 400);
+  json document = json::parse(ant::persistence::encode_profile(ant::persistence::make_new_profile(session)));
+  auto& passages = document["run"]["world"]["passages"];
+  REQUIRE_FALSE(passages.empty());
+  SECTION("disconnected route") { passages[0]["route"] = json::array({json::array({192, 58}), json::array({200, 58})}); }
+  SECTION("unknown room") { passages[0]["room"] = 200; }
+  SECTION("empty route") { passages[0]["route"] = json::array(); }
+  SECTION("oversized route") { passages[0]["route"] = std::vector<std::array<int, 2>>(257, {192, 58}); }
+  SECTION("duplicate room connection") { passages.push_back(passages[0]); }
+  SECTION("oversized room list") {
+    auto& rooms = document["run"]["world"]["rooms"];
+    const auto room = rooms[0];
+    while (rooms.size() <= ant::sim::kMaxRooms) rooms.push_back(room);
+  }
+  CHECK_FALSE(ant::persistence::decode_profile(document.dump()).profile);
+}

@@ -49,7 +49,7 @@ struct RunSnapshot {
   sim::WorldSnapshot world;
 };
 
-inline constexpr std::uint32_t kCurrentSchemaVersion = 3;
+inline constexpr std::uint32_t kCurrentSchemaVersion = 4;
 
 struct ProfileSnapshot {
   std::uint32_t schema_version{kCurrentSchemaVersion};

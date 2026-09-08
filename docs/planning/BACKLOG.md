@@ -31,6 +31,7 @@ The [audit and design guide](NEXT_STEPS.md) defines source findings, implementat
 | T014f — complete | Purpose-built rooms with widen-or-build demand, finite discoverable forage sites, scouting and recruitment | T014e | Room geometry and dig-order tests, scouting and discovery test, five-seed survival, schema 3 migration |
 | T014g — complete | Layered ground, baked rooms, banked stores, view-derived effects, colony log, readiness bar, header chip, ant motion | T014f | Native captures at four colony ages and of the flight panel; panel fits without scrolling at 1440x835 |
 | T014h — complete | Small irregular chambers, more of them, brood rooms that scale with population, a queen who walks and lays where she stands | T014g | Room shape and dig tests, round-trip equality, three-seed balance re-check, native captures |
+| T014i — implemented, limited verification | Persistent obstacle-aware branch passages, useful cross-passages, capacity priority and construction feedback | T014h | Focused network/save checks; visual QA and production balance deferred by owner |
 | T013a | Re-baseline geometry/motion, affordable first trait, delayed flight and long-lived colony policies | T006b, T003b | Five seeds × both policies, tier-I local benefit measurement, larger-payout and no-flight evidence |
 | T014c — partial | Pointer/keyboard flight confirmation, shop resume, save failure and normal defeat restart | T014a, T013a | Actual cancel/commit/shop/reload/new-colony flow with both input methods |
 | T014d | Onboarding, trends, four clear cards, scaling and reduced motion | T014b, T014c | Required scenes, minimum-size/scaling/focus review; limitations recorded |
@@ -172,3 +173,16 @@ Acceptance: packaged app launched from Finder outside repo, assets/input/save/re
 ## Not scheduled
 
 True claustral founding, sandbox as a separate polished mode, cave-ins, rain/floods, combat, extra species, full male mating biology, multiple colonies, cloud saves, offline progress, and browser port. Reconsider only after v0.1 has evidence of a satisfying first and second run.
+
+## T014i — A connected working nest
+
+User-directed broader gameplay slice on 2026-09-08. Read [NEST_NETWORK](../design/NEST_NETWORK.md),
+SIMULATION and PERSISTENCE. Required chambers connect to nearby reachable air by persistent routes;
+optional cross-passages shorten actual nest journeys and yield to capacity demand. Keep physical
+excavation, the four-worker crew, spoil transport, useful-space accounting and saved intent.
+
+Acceptance: stone detour with no isolated-air anchor; retained corridor shoulders; exact face
+reservations; a real reduction in legal path length after completing a connection; preemption
+without losing the old project; schema-3 migration and schema-4 continuation. Owner requests no
+visual testing or full routine sweeps this session. Leave appearance, production pacing and T003b
+motion acceptance open for follow-up.

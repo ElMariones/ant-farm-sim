@@ -79,7 +79,7 @@ World::World(const WorldSnapshot& snapshot)
   queen_settle_ = snapshot.queen_settle;
   recruiting_source_ = snapshot.recruiting_source;
   recruit_until_ = snapshot.recruit_until;
-  nest_plan_.restore(snapshot.rooms);
+  nest_plan_.restore(snapshot.rooms, snapshot.passages);
   if (snapshot.terrain.size() != static_cast<std::size_t>(Grid::kWidth * Grid::kHeight) ||
       dig_work_.size() != snapshot.terrain.size()) throw std::invalid_argument("snapshot grid size mismatch");
   for (int y = 0; y < Grid::kHeight; ++y) for (int x = 0; x < Grid::kWidth; ++x) {
@@ -552,15 +552,16 @@ void World::recompute_needs_and_dig_plan() {
   const bool wants_granary = stores_.carbohydrate * 2 >= stores_.carbohydrate_capacity ||
                              stores_.protein * 2 >= stores_.protein_capacity ||
                              store_cells_.empty();
-  const std::size_t rooms_before = nest_plan_.rooms().size();
-  const bool was_building = !nest_plan_.idle();
-  nest_plan_.update(grid_, home_, seed_, wants_nursery, wants_granary);
-  if (nest_plan_.rooms().size() != rooms_before) {
-    ++rooms_version_;
-    ++stats_.rooms_built;
-  } else if (was_building != !nest_plan_.idle()) {
-    ++rooms_version_;
-  }
+  const auto rooms_before = nest_plan_.rooms();
+  // Connections are a surplus-labor investment: a fed colony with a workforce can shorten
+  // tomorrow's carrying trips. Dig focus brings this forward; food/brood focus postpones it.
+  const bool fed = stores_.carbohydrate >= 20'000 && stores_.protein >= 15'000;
+  const bool route_work = fed && living_workers() >= (focus_ == Focus::Expansion ? 12 : 24) &&
+      (focus_ == Focus::Balanced || focus_ == Focus::Expansion);
+  nest_plan_.update(grid_, home_, seed_, wants_nursery, wants_granary,
+                    route_work && tick_ % (10 * kTicksPerSecond) == 0);
+  if (nest_plan_.rooms() != rooms_before) ++rooms_version_;
+  if (nest_plan_.rooms().size() > rooms_before.size()) ++stats_.rooms_built;
 
   const auto shortage = [](const std::int64_t amount, const std::int64_t target) { return target <= 0 ? std::uint16_t{0} : amount >= target ? std::uint16_t{0} : static_cast<std::uint16_t>(((target - amount) * 1'000) / target); };
   // The colony forages to fill the granary it has, not to reach a fraction of it. Capacity is now
@@ -574,7 +575,9 @@ void World::recompute_needs_and_dig_plan() {
   const bool urgent = brood_.size() * 4 >= static_cast<std::size_t>(nursery_capacity_ * 3) ||
                       stores_.carbohydrate * 4 >= stores_.carbohydrate_capacity * 3 ||
                       stores_.protein * 4 >= stores_.protein_capacity * 3;
-  task_diagnostics_.stimuli[1] = nest_plan_.idle() ? 0 : static_cast<std::uint16_t>(urgent ? 800 : 300);
+  const bool connecting = !nest_plan_.project() && !nest_plan_.idle();
+  task_diagnostics_.stimuli[1] = nest_plan_.idle() ? 0 : connecting ?
+      static_cast<std::uint16_t>(route_work ? 180 : 0) : static_cast<std::uint16_t>(urgent ? 800 : 300);
   const std::size_t uncared = static_cast<std::size_t>(std::count_if(brood_.begin(), brood_.end(), [](const BroodSnapshot& b) { return b.care_remaining == 0; }));
   task_diagnostics_.stimuli[2] = brood_.empty() ? 0 : static_cast<std::uint16_t>((uncared * 1'000U) / brood_.size());
   const std::size_t cleanable = static_cast<std::size_t>(std::count_if(corpses_.begin(), corpses_.end(), [](const CorpseSnapshot& c) { return c.cleanable; }));
@@ -839,6 +842,8 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
     if (const std::optional<GridPos> claimed = nest_plan_.claim(grid_, home_)) {
       mind.target = *claimed;
       mind.has_target = true;
+      mind.action_ticks = 0;
+      clear_path(registry_.get<Movement>(e));
       // Stay committed long enough to actually get there and take a bite. A room at the far end of
       // the nest is a ten-second walk, and a worker that reconsidered every five seconds turned
       // back before it ever arrived; a face next door still costs nothing extra.
@@ -848,7 +853,7 @@ void World::process_excavator(const entt::entity e, int& path_budget) {
     }
   }
   if (!mind.has_target) return; const GridPos current = registry_.get<Position>(e).cell(); GridPos work = current; bool adjacent = false;
-  for (const GridPos d : kNeighbors) { const GridPos candidate{mind.target.x + d.x, mind.target.y + d.y}; if (grid_.walkable(candidate)) { work = candidate; adjacent = candidate == current; if (adjacent) break; } }
+  for (const GridPos d : kNeighbors) { const GridPos candidate{mind.target.x + d.x, mind.target.y + d.y}; if (grid_.walkable(candidate) && home_field_.distance(candidate) >= 0) { work = candidate; adjacent = candidate == current; if (adjacent) break; } }
   if (!adjacent) { route_to(e, work, path_budget); return; } if (++mind.action_ticks < 10) return; mind.action_ticks = 0; std::uint16_t& remaining = dig_work_[grid_index(mind.target)]; if (remaining == 0) remaining = dig_effort(grid_.at(mind.target));
   const std::uint16_t dig_amount = static_cast<std::uint16_t>(
       (100 + 25 * adaptation_levels_[0]) * (traits_.industry_tier >= 1 ? 115 : 100) / 100);
@@ -1052,14 +1057,20 @@ RouteBias World::bias_for(const entt::entity e) const {
   return route_bias(seed_, registry_.get<Identity>(e).id);
 }
 
-// One project at a time means a claim is just a headcount, retallied once per tick rather than
-// rescanned per excavator.
+// Retally exact occupied faces once per tick. A preempted cross-passage relinquishes its crew;
+// carrying ants still finish hauling their spoil, and a chamber receives the freed workers.
 void World::refresh_dig_claims() {
   nest_plan_.clear_claims();
+  const auto& planned = nest_plan_.work_cells(grid_, home_);
   for (const entt::entity entity : ordered_entities_) {
     if (!registry_.all_of<WorkerMind>(entity)) continue;
-    const WorkerMind& mind = registry_.get<WorkerMind>(entity);
-    if (mind.task == Task::Excavate && mind.has_target) nest_plan_.note_claim();
+    WorkerMind& mind = registry_.get<WorkerMind>(entity);
+    if (mind.task != Task::Excavate || !mind.has_target) continue;
+    if (std::find(planned.begin(), planned.end(), mind.target) == planned.end()) {
+      mind.has_target = false;
+      mind.action_ticks = 0;
+      clear_path(registry_.get<Movement>(entity));
+    } else nest_plan_.note_claim(mind.target);
   }
 }
 
@@ -1126,7 +1137,7 @@ WorldSnapshot World::snapshot() const {
   out.behavior_rng_state = behavior_rng_.state(); out.behavior_rng_increment = behavior_rng_.increment();
   out.lifecycle_rng_state = lifecycle_rng_.state(); out.lifecycle_rng_increment = lifecycle_rng_.increment();
   out.world_rng_state = world_rng_.state(); out.world_rng_increment = world_rng_.increment();
-  out.rooms = nest_plan_.rooms(); out.next_source_spawn = next_source_spawn_;
+  out.rooms = nest_plan_.rooms(); out.passages = nest_plan_.passages(); out.next_source_spawn = next_source_spawn_;
   out.recruiting_source = recruiting_source_; out.recruit_until = recruit_until_;
   out.trails = trails_.cells(); out.dig_work = dig_work_; out.task_diagnostics = task_diagnostics_;
   out.brood = brood_; out.corpses = corpses_; out.dropped_food = dropped_food_;
@@ -1156,6 +1167,12 @@ std::uint64_t World::canonical_hash() const {
   for (const FoodSource& source : sources_) { hash_value(hash, source.id); hash_signed(hash, source.amount); hash_signed(hash, source.reserved); hash_value(hash, source.known); }
   hash_value(hash, next_source_spawn_); hash_value(hash, recruiting_source_); hash_value(hash, recruit_until_); hash_value(hash, world_rng_.state());
   for (const Room& room : nest_plan_.rooms()) { hash_signed(hash, room.centre.x); hash_signed(hash, room.centre.y); hash_value(hash, room.radius); hash_value(hash, static_cast<std::uint64_t>(room.kind)); hash_value(hash, room.complete); }
+  hash_value(hash, nest_plan_.passages().size());
+  for (const Passage& passage : nest_plan_.passages()) {
+    hash_signed(hash, passage.room); hash_value(hash, passage.complete);
+    hash_value(hash, passage.route.size());
+    for (GridPos cell : passage.route) { hash_signed(hash, cell.x); hash_signed(hash, cell.y); }
+  }
   for (const entt::entity e : ordered_entities_) { const Identity& id = registry_.get<Identity>(e); const Position& p = registry_.get<Position>(e); const Cargo& cargo = registry_.get<Cargo>(e); hash_value(hash, id.id); hash_value(hash, static_cast<std::uint64_t>(p.x_subcells)); hash_value(hash, static_cast<std::uint64_t>(p.y_subcells)); hash_signed(hash, cargo.amount); if (registry_.all_of<WorkerMind>(e)) { const WorkerMind& mind = registry_.get<WorkerMind>(e); hash_value(hash, static_cast<std::uint64_t>(mind.task)); hash_value(hash, mind.committed_until); } if (registry_.all_of<Life>(e)) { const Life& life = registry_.get<Life>(e); hash_value(hash, life.age); hash_value(hash, life.lifespan); hash_value(hash, life.starvation); } }
   for (const BroodSnapshot& b : brood_) { hash_value(hash, b.id); hash_value(hash, static_cast<std::uint64_t>(b.stage)); hash_value(hash, static_cast<std::uint64_t>(b.role)); hash_value(hash, b.progress); hash_value(hash, b.starvation); hash_signed(hash, b.position.x); hash_signed(hash, b.position.y); hash_value(hash, b.carried_by); }
   for (const FoodPile& pile : granary_) { hash_signed(hash, pile.position.x); hash_signed(hash, pile.position.y); hash_value(hash, static_cast<std::uint64_t>(pile.nutrient)); hash_signed(hash, pile.amount); } for (const CorpseSnapshot& c : corpses_) { hash_value(hash, c.id); hash_value(hash, c.age); } for (const DroppedCargoSnapshot& dropped : dropped_food_) { hash_value(hash, dropped.id); hash_signed(hash, dropped.amount); hash_value(hash, dropped.age); }

@@ -868,6 +868,8 @@ void Renderer::observe(const game::GameView& view, const float delta) {
   if (now.sources_found > watched_.sources_found) note("Scouts found food", Icon::Seed);
   if (now.sources_exhausted > watched_.sources_exhausted) note("A food site ran dry", Icon::Prey);
   if (now.rooms_built > watched_.rooms_built) note("Started a new chamber", Icon::Colony);
+  if (now.complete_passages > watched_.complete_passages)
+    note("A new passage is open", Icon::Expansion);
   if (now.complete_rooms > watched_.complete_rooms) {
     for (const sim::Room& room : view.rooms) {
       if (!room.complete) continue;
@@ -1306,7 +1308,8 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
                           view.recruiting_source != 0 ? "A new food source was found" :
                           !view.knows_any_food ? "Scouts are out searching" :
                           view.brood.size() >= static_cast<std::size_t>(view.nursery_capacity) ? "Brood rooms are full" :
-                          view.stores.protein < 10'000 ? "Protein is running low" : "Growing steadily";
+                          view.stores.carbohydrate < 10'000 ? "Energy stores are running low" :
+                          view.stores.protein < 10'000 ? "Protein is running low" : "Tending the nest";
   draw_text(condition, panel_x + 22, py(116), 22, view.decline ? kProtein : kInk);
   const int nurseries = static_cast<int>(std::count_if(view.rooms.begin(), view.rooms.end(),
       [](const sim::Room& room) { return room.kind == sim::RoomKind::Nursery; }));
@@ -1330,21 +1333,28 @@ void Renderer::draw_interface(const game::GameView& view, const bool paused, con
 
   draw_readiness(view, panel_x, panel_width, py(258));
 
-  draw_text("COLONY ACTIVITY", panel_x + 22, py(312), 14, kMutedInk);
+  draw_text(TextFormat("ACTIVITY  |  %zu new passages", view.construction.complete_passages),
+            panel_x + 22, py(312), 14, kMutedInk);
   draw_text(TextFormat("Forage %u   Dig %u   Nurse %u", view.tasks.workers_by_task[0],
                        view.tasks.workers_by_task[1], view.tasks.workers_by_task[2]),
             panel_x + 22, py(332), 16);
-  draw_text(TextFormat("%llu cells dug  |  %llu sites found",
-                       static_cast<unsigned long long>(view.stats.cells_excavated),
-                       static_cast<unsigned long long>(view.stats.sources_found)),
-            panel_x + 22, py(352), 16, kMutedInk);
+  const char* project_name = "Nest has room to grow";
+  switch (view.construction.kind) {
+  case sim::ConstructionKind::Nursery: project_name = "Opening brood space"; break;
+  case sim::ConstructionKind::Granary: project_name = "Making room for food"; break;
+  case sim::ConstructionKind::CrossPassage:
+    project_name = view.tasks.stimuli[1] == 0 ? "Passage waits for spare labor" : "Shortening nest journeys";
+    break;
+  case sim::ConstructionKind::None: break;
+  }
+  draw_text(project_name, panel_x + 22, py(352), 15, kMutedInk);
 
   const std::array<Icon, 4> focus_icons{
       {Icon::Balance, Icon::Growth, Icon::Expansion, Icon::Seed}};
   const std::array<const char*, 4> focus_names{{"Even", "Brood", "Dig", "Food"}};
   const std::array<const char*, 4> focus_hints{{"Even effort across every job (B)",
                                                 "Tend the brood first (G)",
-                                                "Dig new chambers first (X)",
+                                                "Build chambers and shorter carrying routes (X)",
                                                 "Bring food home first (F)"}};
   for (int index = 0; index < 4; ++index) {
     Rectangle bounds = focus_button_bounds(panel_x, index);

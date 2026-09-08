@@ -34,6 +34,7 @@ struct GameView {
     std::uint64_t sources_exhausted{};
     std::uint64_t rooms_built{};
     std::size_t complete_rooms{};
+    std::size_t complete_passages{};
     std::array<std::uint8_t, 4> upgrade_levels{};
   };
   [[nodiscard]] Watched watched() const;
@@ -46,6 +47,7 @@ struct GameView {
   sim::GridPos home{};
   std::vector<sim::FoodSource> sources;
   std::vector<sim::Room> rooms;
+  sim::Construction construction;
   // The site the colony is currently calling everyone to, while the alert lasts.
   sim::EntityId recruiting_source{};
   bool knows_any_food{};

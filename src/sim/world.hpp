@@ -157,6 +157,8 @@ public:
   [[nodiscard]] GridPos home() const { return home_; }
   [[nodiscard]] const std::vector<FoodSource>& sources() const { return sources_; }
   [[nodiscard]] const std::vector<Room>& rooms() const { return nest_plan_.rooms(); }
+  [[nodiscard]] const std::vector<Passage>& passages() const { return nest_plan_.passages(); }
+  [[nodiscard]] Construction construction() const { return nest_plan_.construction(grid_, home_); }
   // The site the colony is currently recruiting to, while the alert lasts.
   [[nodiscard]] EntityId recruiting_source() const {
     return tick_ < recruit_until_ ? recruiting_source_ : 0;
@@ -297,8 +299,7 @@ private:
   Pcg32 world_rng_;
   TrailField trails_;
   TaskDiagnostics task_diagnostics_{};
-  // Excavation exists to build rooms. One project at a time, so the colony finishes a chamber
-  // before starting the next and the nest reads as rooms joined by the corridors that reached them.
+  // Required rooms take priority over optional connections that shorten carrying journeys.
   NestPlan nest_plan_;
   std::uint64_t rooms_version_{1};
   std::vector<std::uint16_t> dig_work_;

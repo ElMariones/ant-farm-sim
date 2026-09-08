@@ -69,3 +69,19 @@ separating useful chamber space from transit corridors remains T006b.
 
 Spoil overflow is now counted rather than folded into deliveries, so excavated grains, the visible
 mound and off-view overflow reconcile.
+
+## D023 — Invest surplus labor in useful nest connections (2026-09-08)
+
+The owner requested creative gameplay development, richer ant farms and many passages, explicitly
+without visual testing or lengthy routine verification this session. T014i extends the existing
+room-driven loop instead of adding another currency or player-drawn blueprints. Rooms connect to
+nearby reachable nest air, keep their routes through excavation, and detour around rock. When fed
+and staffed, the colony can cut a cross-passage that reduces an existing trip by at least 25%.
+Urgent space retains priority; optional intent persists through interruptions and saving.
+
+This supersedes T014f's recomputed straight corridor toward home. Passage cells grant no capacity
+unless they belong to an existing designated room. Real digging and hauling earn existing Work;
+there is no completion payout and no passive reward for planning. Focus influences when spare
+labor is available. Geometry and logistics affect future state, so schema 4 stores passages and
+migrates older saves without promising cross-version hash equality. Limits and focused acceptance
+are in NEST_NETWORK and STATUS; full balance and native visual acceptance remain open.

@@ -266,3 +266,27 @@ trip in three to a cradle in a brood room, otherwise a turn about her own chambe
 where the next egg lands depends on where she happens to be, and a nurse carries it on to a free
 cradle from there and fetches back anything she finds lying outside one. Her walk is part of the
 run: her path and the tick she may next choose a destination are both saved.
+
+## Persistent branches and cross-passages — T014i (2026-09-08)
+
+[NEST_NETWORK](../design/NEST_NETWORK.md) supersedes the home-directed corridor algorithm above.
+A bounded cardinal search connects a new room to reachable nest air, pricing soil at 10, clay at 14,
+roots at 18, plus deterministic 0–2 cost per four-cell patch. Permanent rock is excluded. These are
+planning preferences; the existing `dig_effort` and physical excavation/hauling rules remain intact.
+Routes are fixed once planned, up to 256 cells and 52 passages. Width is three cells, with both
+shoulders at turns; stone at a shoulder becomes a pinch point. Only connected air exposes work.
+Rock-enclosed chamber islands stay intact. Room separation now uses Euclidean clearance including
+the irregular rim, and widening considers other usable rooms when the nearest one cannot grow.
+
+Every ten simulated seconds, surplus labor may consider up to eight best room-pair shortcuts.
+Require centres 12–40 cells apart, an existing journey at least 12 steps longer and 1.5 times the
+Manhattan separation, a planned route at least 25% shorter than the existing cardinal journey,
+and at least four solid centreline cells. Limit optional connections to half the room count.
+A colony needs 20,000 carbohydrate, 15,000 protein and 24 workers (12 with Expansion focus).
+Growth/Foraging focus defer optional work. Required nursery/granary projects preempt connections;
+carriers finish their loads and displaced diggers release old paths and claims. Optional excavation
+stimulus is 180 while eligible and zero otherwise; existing task commitments may take time to expire.
+
+Claims record actual cells, not their old ordinal position in a changing frontier. Connected-air
+and pending-work caches derive from terrain and intent; they do not enter snapshots. Room geometry
+changes invalidate useful-capacity caches even when a completed room immediately starts widening.

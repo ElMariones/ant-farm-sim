@@ -39,6 +39,14 @@ The colony is drawn as a real cross-section. Roots run down from the turf and ca
 
 The colony digs for a reason. Every excavation is a **room** it decided it needed — a brood room or a granary — and the corridor that reached it, so the nest is chambers joined by passages rather than wandering lines. Chambers are small and none of them is a perfect circle: each bulges and pinches by a cell, so a mature colony is a cluster of a dozen or more irregular pockets rather than a few caverns. When a room is half full the colony widens it; when it can be widened no further, it sites another one further out, and it keeps roughly one cradle for every two workers as it grows.
 
+Passages now branch from the nearest reachable part of the nest and bend around permanent stone.
+Their routes stay planned until workers finish the edges, so a thin pilot tunnel develops into a
+proper passage. Once a colony has food and spare workers, it can connect two rooms whose existing
+journey is needlessly long. These cross-passages make loops through the nest; brood and storage
+space always take priority. Dig focus brings this work forward, while Food and Brood focus defer it.
+The activity panel explains the current construction purpose and announces completed passages.
+See [nest network design](docs/design/NEST_NETWORK.md) for the rules and remaining validation.
+
 The queen walks. She settles, then makes for a cradle in a brood room or takes a turn about her own chamber, at a third of a worker's pace — and she lays where she stands, so a nurse has to carry each egg on from wherever she happened to be. Every grain the colony owns is a visible heap on a real cell in a granary, the queen lays where she stands and a nurse carries each egg to a free cradle in a brood room, and store capacity is exactly the room the colony has dug.
 
 Food runs out. A forage site is a fallen berry or a dead beetle with a finite amount in it, and when the last grain is carried away it is gone. New ones appear along the surface, and the colony does not know they are there: an undiscovered site is drawn as a faint outline until a scout walks past it. When the colony is short of something it has nowhere left to collect, a few workers go searching while the rest fetch what is still worth fetching or wait — and the moment one finds a site, the whole colony is alerted and steered onto it.

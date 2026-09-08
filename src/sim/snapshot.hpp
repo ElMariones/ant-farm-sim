@@ -47,6 +47,7 @@ struct WorldSnapshot {
   // The rooms the colony has built or is building. They are the whole reason it digs, so they are
   // saved rather than guessed back from the shape of the ground.
   std::vector<Room> rooms;
+  std::vector<Passage> passages;
   Tick next_source_spawn{};
   EntityId recruiting_source{};
   Tick recruit_until{};

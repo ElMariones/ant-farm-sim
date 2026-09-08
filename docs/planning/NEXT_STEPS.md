@@ -2,6 +2,15 @@
 
 Reviewed 2026-09-07 against `f1ddf4c` on `main`. The starting worktree was clean. This deliverable is a source/commit audit and a design handoff; the proposed gameplay and UI changes below are **not implemented by this document**. No live UI interaction or new screenshot review was performed during this audit. Findings distinguish source-confirmed defects, reproduced contracts, and design limitations.
 
+## Current continuation — 2026-09-08
+
+The audit below is historical; STATUS records the later T014a–h implementation. T014i now adds
+persistent branches around rock, cross-passages that shorten journeys, construction priorities,
+and schema-4 saved passage intent. See [NEST_NETWORK](../design/NEST_NETWORK.md) for the working
+loop and exact limits. This session intentionally omits visual QA and a full balance sweep at the
+owner's request. Next: T003b movement, then T013a production pacing with the new geometry; do not
+repeat T014a or treat the old audit's tunnel description as current code.
+
 ## Assessment
 
 The project has a real deterministic colony, resource accounting, durable saves and a generation economy. Preserve those foundations. The watchable-colony and interaction gates are weaker than the milestone labels suggest: connected excavation does not yet create a convincing network of tunnels, movement collapses onto shared routes, and picking bypasses the DPI conversion already used by the camera. Release preparation should follow repairs to this experience.

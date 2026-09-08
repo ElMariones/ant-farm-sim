@@ -10,8 +10,7 @@
 namespace ant::sim {
 
 // The colony digs for a reason. Every excavation belongs to one room the colony has decided it
-// needs — a brood room or a granary — and to the corridor that reaches it, so a finished nest is
-// chambers joined by passages rather than wandering lines.
+// needs, its access passage, or a cross-passage that shortens an existing journey.
 //
 // This owns intent only. It never edits the grid: workers still walk to a planned cell, cut it, and
 // carry the grain out. A cell only becomes Air because somebody excavated it.
@@ -23,12 +22,14 @@ inline constexpr int kDigRadius = 96;
 inline constexpr int kNurseryReach = 46;
 // A room opens at this radius and may be widened to this one before the colony sites another.
 // Chambers are small: a colony ends up with many pockets joined by passages rather than a few
-// caverns, which is what an ant farm actually looks like.
+// caverns. This is a game geometry rule, not a species-specific biological claim.
 inline constexpr int kRoomStartRadius = 3;
 inline constexpr int kRoomMaxRadius = 5;
 // Corridor cross-section, in cells, measured across its run.
 inline constexpr int kCorridorWidth = 3;
 inline constexpr std::size_t kMaxRooms = 26;
+inline constexpr std::size_t kMaxPassages = kMaxRooms * 2;
+inline constexpr std::size_t kMaxPassageLength = 256;
 // Workers that may cut the same project at once.
 inline constexpr int kDiggersPerProject = 4;
 
@@ -53,41 +54,72 @@ struct Room {
 
 [[nodiscard]] bool within_envelope(GridPos cell, GridPos home);
 
+// An immutable route, including both anchors. -1 denotes a cross-passage; otherwise room is the
+// destination room's stable vector index. Width is intent too: opening the centre never erases
+// the unfinished shoulders. Rock in a shoulder stays as a natural pinch point.
+struct Passage {
+  std::vector<GridPos> route;
+  int room{-1};
+  bool complete{};
+  friend bool operator==(const Passage&, const Passage&) = default;
+};
+
+enum class ConstructionKind : std::uint8_t { None, Nursery, Granary, CrossPassage };
+struct Construction {
+  ConstructionKind kind{ConstructionKind::None};
+  std::size_t remaining_cells{};
+  std::size_t complete_passages{};
+};
+
 class NestPlan {
 public:
   [[nodiscard]] const std::vector<Room>& rooms() const { return rooms_; }
-  void restore(std::vector<Room> rooms);
+  [[nodiscard]] const std::vector<Passage>& passages() const { return passages_; }
+  void restore(std::vector<Room> rooms, std::vector<Passage> passages = {});
   void found(Room room);
 
   // Marks finished rooms complete, then, when the colony is short of space, either widens the
   // nearest room of that kind or sites a new one one ring further out. One project at a time, so
   // the colony finishes a room before starting the next.
   void update(const Grid& grid, GridPos home, std::uint64_t seed, bool wants_nursery,
-              bool wants_granary);
+              bool wants_granary, bool improve_routes = false);
 
   // The cell an excavator should cut next: the first exposed face of the project that no other
   // worker has taken this tick. Nothing when the project has no reachable face left.
   [[nodiscard]] std::optional<GridPos> claim(const Grid& grid, GridPos home);
-  void clear_claims() { claims_ = 0; }
-  void note_claim() { ++claims_; }
-  [[nodiscard]] bool idle() const { return !project().has_value(); }
+  void clear_claims() { claimed_cells_.clear(); }
+  void note_claim(GridPos cell) { if (claimed_cells_.size() < kDiggersPerProject) claimed_cells_.push_back(cell); }
+  [[nodiscard]] bool idle() const;
+  [[nodiscard]] Construction construction(const Grid& grid, GridPos home) const;
   // Index of the room being dug, if any.
   [[nodiscard]] std::optional<std::size_t> project() const;
   [[nodiscard]] int rooms_of(RoomKind kind) const;
 
   // Cells the project still needs opened, in dig order: the corridor from the nest outward, then
   // the room itself. Exposed publicly so the excavation order can be asserted directly.
-  [[nodiscard]] std::vector<GridPos> work_cells(const Grid& grid, GridPos home) const;
+  [[nodiscard]] const std::vector<GridPos>& work_cells(const Grid& grid, GridPos home) const;
 
 private:
+  [[nodiscard]] std::vector<GridPos> build_work_cells(const Grid& grid, GridPos home) const;
   [[nodiscard]] bool site_is_clear(const Grid& grid, GridPos home, GridPos centre, int radius,
                                    RoomKind kind) const;
   [[nodiscard]] bool widen(GridPos home, RoomKind kind);
   [[nodiscard]] bool site_new_room(const Grid& grid, GridPos home, std::uint64_t seed,
                                    RoomKind kind);
+  bool plan_cross_passage(const Grid& grid, GridPos home, std::uint64_t seed);
+  [[nodiscard]] std::optional<std::size_t> passage_project() const;
+  void refresh_connected(const Grid& grid, GridPos home) const;
 
   std::vector<Room> rooms_;
-  int claims_{};
+  std::vector<Passage> passages_;
+  // Derived cardinal connectivity, never serialized. Shared by all claims on one topology.
+  mutable std::vector<GridPos> work_cache_;
+  mutable std::uint64_t work_revision_{};
+  mutable GridPos work_home_{};
+  mutable std::vector<int> connected_;
+  mutable std::uint64_t connected_revision_{};
+  mutable GridPos connected_home_{};
+  std::vector<GridPos> claimed_cells_;
 };
 
 } // namespace ant::sim

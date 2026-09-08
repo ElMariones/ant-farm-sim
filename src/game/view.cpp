@@ -21,6 +21,7 @@ GameView make_view(const Session& session) {
   view.home = world.home();
   view.sources = world.sources();
   view.rooms = world.rooms();
+  view.construction = world.construction();
   view.recruiting_source = world.recruiting_source();
   view.knows_any_food = world.knows_any_food();
   view.stores = world.stores();
@@ -62,6 +63,7 @@ GameView::Watched GameView::watched() const {
   out.rooms_built = stats.rooms_built;
   out.complete_rooms = static_cast<std::size_t>(
       std::count_if(rooms.begin(), rooms.end(), [](const sim::Room& room) { return room.complete; }));
+  out.complete_passages = construction.complete_passages;
   out.upgrade_levels = upgrade_levels;
   return out;
 }

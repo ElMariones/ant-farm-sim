@@ -118,3 +118,23 @@ finished; where it does not, the colony digs them out, which is the same work it
 room it decided it needed. Migration cannot invent an appearance schedule the old format never had,
 so the restored colony continues at the same tick with the same ground, ants, brood and food, but
 not with a bit-identical canonical hash; the migration test asserts exactly that.
+
+## Schema 4 — persistent nest passages (2026-09-08)
+
+World snapshots save `passages`: each entry has a cardinal centreline `route` including anchors,
+a destination `room` index (-1 for a cross-passage), and `complete`. Room order is stable. The full
+route and completion state participate in the canonical world hash; connectivity and work caches
+are rebuilt. A one-cell route can record an already-open entrance when widening a founding room;
+it does not count as a newly completed passage in the public view.
+
+Decode rejects more than 52 passages or 26 rooms, empty/over-256 routes, repeated or nonadjacent
+cells, cells outside the excavation envelope, permanent-rock intersections, invalid/duplicate room
+references, a route ending outside its room, and completed routes with solid centreline cells.
+Malformed profiles are never adopted. Runtime completion also requires diggable shoulders opened.
+
+Version 3 migrates in memory by adding an empty passage list. Terrain, room intent, grain, actors,
+reservations and progress remain unchanged by this migration; unfinished rooms acquire an entrance
+route at the next planning update. BetweenRuns has no world to migrate. Versions 1/2 still pass
+through their earlier migrations first. Exact continuation is guaranteed only within the new
+algorithm, not against a schema-3 executable. Existing completed passages cannot be reconstructed
+as historical projects and therefore are not included in the new-passage counter.

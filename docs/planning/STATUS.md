@@ -1,6 +1,35 @@
 # Project status
 
-Updated: 2026-09-07.
+Updated: 2026-09-08.
+
+## Latest session — T014i: a connected working nest
+
+Implemented persistent branches from reachable nest air, routes around stone, retained three-cell
+passage shoulders and optional cross-passages that shorten existing room-to-room journeys.
+Food and workforce gates make connections a surplus-labor investment; nursery and granary demand
+preempt them without losing the plan. Dig focus brings optional work forward. The colony panel now
+explains construction intent and announces new passages. Full design: [NEST_NETWORK](../design/NEST_NETWORK.md).
+
+Also corrected exact face reservations, stale approach paths when a digger changes target,
+room-clearance checks, selection of a usable room to widen and capacity-cache invalidation when
+one room finishes and immediately widens. Schema 4 preserves passage intent; schema 3 migrates in
+memory with terrain and room progress retained. Existing routes/claims remain deterministic under
+the new algorithm; cross-version equality with the previous executable is not promised.
+
+Verification on Apple Silicon macOS, Apple Clang 21, Debug dev preset:
+
+- `cmake --build --preset dev -j 4`: pass (desktop, headless and tests compile).
+- `./build/dev/ant_tests '[nest-network],[nest],[snapshot]'`: **pass, 834 assertions in 26 cases**.
+  Includes eight new network/save cases, real path shortening in a U-shaped fixture, interrupted
+  construction, the existing 30,000-tick seed-7 colony test, migration and continuation checks.
+- `git diff --check`: pass.
+
+Per the owner's explicit request, no game window, screenshots, native interaction review, full
+suite, long soak or production policy sweep. Appearance, shortcut frequency in ordinary play and
+production pacing are unverified. Existing compiler warnings remain (founding-terrain aggregate
+initializer and duplicate linked library). T003b remains next; T013a must remeasure the new
+geometry. A completely rock-sealed unfinished room in a legacy save may still need an explicit
+abandoned-project state; newly sited rooms reject unreachable entrance routes.
 
 ## Current state
 
@@ -8,7 +37,7 @@ Updated: 2026-09-07.
 
 M4 completes the generation loop. A colony latches **maturity** at 100 living workers, 150 worker births and 12 simulated minutes; after that one egg in five becomes a **winged queen**, capped at ten live and developing combined. With three winged queens, a living founding queen and an unassisted run, the player can send a **nuptial flight**, which pays Genetic Legacy through a single committed profile revision carrying an immutable receipt. Between colonies, Legacy buys eight permanent trait tiers across Vigor and Industry, and founding the next colony applies the owned traits exactly once.
 
-## Latest session — T014h
+## Earlier session — T014h
 
 **A colony, not a few caverns.** Chambers shrank from radius 5-8 to 3-5 and the cap rose to
 twenty-six, so a mature nest is a cluster of ten or more small pockets off the shaft rather than
@@ -124,7 +153,7 @@ in a native session, so T014c stays partial.
 
 Suggested prompt for a smaller model:
 
-> Read AGENTS.md, docs/planning/STATUS.md and docs/planning/NEXT_STEPS.md, then implement T014a from docs/planning/BACKLOG.md. Preserve deterministic command validation and exact integer accounting. Inspect existing changes first, run the documented headless and dev tests, update affected contracts and STATUS, and commit with the required identity and a descriptive body.
+> Read AGENTS.md, docs/planning/STATUS.md and docs/planning/NEXT_STEPS.md, then implement T003b from docs/planning/BACKLOG.md. Preserve deterministic command validation and exact integer accounting. Inspect existing changes first, run the documented headless and dev tests, update affected contracts and STATUS, and commit with the required identity and a descriptive body.
 
 ## Milestone state
 
