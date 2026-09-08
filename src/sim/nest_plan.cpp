@@ -297,9 +297,12 @@ bool NestPlan::site_is_clear(const Grid& grid, const GridPos home, const GridPos
   }
   // A little rock in the wall is character; a site that is mostly rock is not a room.
   if (total == 0 || blocked * 5 > total) return false;
+  // Far enough from every existing chamber that the ground between them stays ground. A site that
+  // fails this is not rejected as unusable: the ring search simply moves further out, which is how
+  // the nest keeps reaching for new territory instead of hollowing out the ground it already has.
   return std::none_of(rooms_.begin(), rooms_.end(), [&](const Room& other) {
     const int dx = centre.x - other.centre.x, dy = centre.y - other.centre.y;
-    const int clearance = radius + other.radius + 3;
+    const int clearance = radius + other.radius + kRoomSeparation;
     return dx * dx + dy * dy < clearance * clearance;
   });
 }
@@ -311,7 +314,7 @@ bool NestPlan::widen(const GridPos home, const RoomKind kind) {
     const int widened = room.radius + 1;
     const bool crowded = std::any_of(rooms_.begin(), rooms_.end(), [&](const Room& other) {
       const int dx = room.centre.x - other.centre.x, dy = room.centre.y - other.centre.y;
-      const int clearance = widened + other.radius + 3;
+      const int clearance = widened + other.radius + kRoomSeparation;
       return &room != &other && dx * dx + dy * dy < clearance * clearance;
     });
     if (crowded) continue; // A blocked near room must not prevent widening a usable farther room.
@@ -381,7 +384,8 @@ bool NestPlan::plan_cross_passage(const Grid& grid, GridPos home, std::uint64_t 
       if (!rooms_[b].complete) continue;
       const int direct = manhattan(rooms_[a].centre, rooms_[b].centre);
       const int actual = distances[cell_index(rooms_[b].centre)];
-      if (direct < 12 || direct > 40 || actual < direct + 12 || actual * 2 < direct * 3) continue;
+      // Chambers now sit further apart, so the band of journeys worth shortening is wider too.
+      if (direct < 12 || direct > 56 || actual < direct + 12 || actual * 2 < direct * 3) continue;
       candidates.push_back({rooms_[a].centre, rooms_[b].centre, actual, actual - direct});
     }
   }

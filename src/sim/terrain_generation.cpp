@@ -127,11 +127,14 @@ GeneratedTerrain generate_terrain(const std::uint64_t seed) {
   }
   carve_ellipse(grid, generated.home, 5.0, 3.5);
   // A founding nest is already a handful of small chambers: one for the brood and three for stores.
+  // They are set out a clear kRoomSeparation apart, the same spacing the colony holds to when it
+  // sites a chamber of its own, so the nest starts as rooms on the ends of real corridors and the
+  // very first widening is not refused by ground the generator laid too close together.
   generated.rooms = {
-      {{generated.home.x, generated.home.y + 12}, kRoomStartRadius, RoomKind::Nursery, true},
-      {{generated.home.x - 13, generated.home.y + 8}, kRoomStartRadius, RoomKind::Granary, true},
-      {{generated.home.x + 13, generated.home.y + 8}, kRoomStartRadius, RoomKind::Granary, true},
-      {{generated.home.x - 4, generated.home.y + 19}, kRoomStartRadius, RoomKind::Granary, true}};
+      {{generated.home.x, generated.home.y + 16}, kRoomStartRadius, RoomKind::Nursery, true},
+      {{generated.home.x - 17, generated.home.y + 9}, kRoomStartRadius, RoomKind::Granary, true},
+      {{generated.home.x + 17, generated.home.y + 9}, kRoomStartRadius, RoomKind::Granary, true},
+      {{generated.home.x - 2, generated.home.y + 34}, kRoomStartRadius, RoomKind::Granary, true}};
   for (const Room& room : generated.rooms) {
     carve_passage(grid, generated.home, room.centre);
     carve_room(grid, room);

@@ -55,6 +55,7 @@ World::World(const std::uint64_t seed, const TraitModifiers traits)
   stock_granary(Nutrient::Carbohydrate, founding_carbohydrate);
   stock_granary(Nutrient::Protein, founding_protein);
   spawn_queen(); spawn_workers(); recompute_needs_and_dig_plan();
+  refresh_occupancy();
   starting_nest_air_ = connected_nest_air_;
 }
 
@@ -104,7 +105,7 @@ World::World(const WorldSnapshot& snapshot)
     registry_.emplace<Position>(entity, actor.position);
     registry_.emplace<Ant>(entity, actor.ant);
     registry_.emplace<Cargo>(entity, actor.cargo);
-    if (actor.worker || actor.ant.kind == AntKind::Queen) {
+    {
       Movement movement = actor.movement;
       // Restore staleness, not the counter: a path that needed replanning before the save must
       // still need it after.
@@ -127,6 +128,7 @@ World::World(const WorldSnapshot& snapshot)
       carried_food_[static_cast<std::size_t>(actor.cargo.nutrient)] += actor.cargo.amount;
     }
   }
+  refresh_occupancy();
   if (!invariant_holds()) throw std::invalid_argument("snapshot violates world invariants");
 }
 
@@ -183,7 +185,22 @@ void World::process_queen(int& path_budget) {
   }
 }
 
+GridPos World::birth_cell(const EntityId bias) const {
+  // A callow comes up in the queen's chamber. When her own cell is full it emerges in the next one
+  // along rather than on top of her, which is where a whole brood used to arrive at once.
+  if (cell_has_room(home_)) return home_;
+  if (const auto beside = cell_to_give_way(home_, bias)) return *beside;
+  return home_;
+}
+
+void World::note_arrival(const GridPos cell) {
+  if (occupancy_.empty() || !grid_.in_bounds(cell)) return;
+  std::uint8_t& count = occupancy_[grid_index(cell)];
+  if (count < std::numeric_limits<std::uint8_t>::max()) ++count;
+}
+
 void World::spawn_worker(const GridPos p) {
+  note_arrival(p);
   const entt::entity e = registry_.create(); registry_.emplace<Identity>(e, next_id_++); registry_.emplace<Ant>(e, AntKind::Worker);
   registry_.emplace<Position>(e, cell_center(p.x), cell_center(p.y), cell_center(p.x), cell_center(p.y));
   registry_.emplace<Cargo>(e); registry_.emplace<Movement>(e); registry_.emplace<Forager>(e);
@@ -194,10 +211,13 @@ void World::spawn_worker(const GridPos p) {
 }
 
 void World::spawn_winged_queen(const GridPos p) {
+  note_arrival(p);
   const entt::entity e = registry_.create(); registry_.emplace<Identity>(e, next_id_++); registry_.emplace<Ant>(e, AntKind::WingedQueen);
   registry_.emplace<Position>(e, cell_center(p.x), cell_center(p.y), cell_center(p.x), cell_center(p.y));
   registry_.emplace<Cargo>(e);
-  // Winged queens do not forage, dig or nurse, and do not die of age in v0.1.
+  // Winged queens do not forage, dig or nurse, and do not die of age in v0.1. They do move: every
+  // gyne emerges at the same cell, and without somewhere to step they would be one stack of ten.
+  registry_.emplace<Movement>(e);
   registry_.emplace<Life>(e, Life{0, std::numeric_limits<Tick>::max(), 0});
   ordered_entities_.push_back(e);
 }
@@ -531,8 +551,18 @@ void World::step() {
   if (tick_ % kTicksPerSecond == 0) recompute_needs_and_dig_plan();
   task_diagnostics_.workers_by_task.fill(0);
   refresh_dig_claims();
+  // Who is standing where, before anybody moves. Every step this tick keeps it exact.
+  refresh_occupancy();
+  relieve_crowding();
   int path_budget = 16; for (const entt::entity e : ordered_entities_) if (registry_.all_of<WorkerMind>(e)) process_worker(e, path_budget);
   process_queen(path_budget);
+  // Gynes do no work, but they do not stand in each other's way either: they walk the step aside
+  // that crowd relief gave them.
+  for (const entt::entity e : ordered_entities_) {
+    if (registry_.get<Ant>(e).kind == AntKind::WingedQueen && registry_.all_of<Movement>(e)) {
+      static_cast<void>(move_one_tick(e, 4));
+    }
+  }
   if ((tick_ + 1) % kTicksPerSecond == 0) update_biology();
   if ((tick_ + 1) % 4 == 0) update_trails();
   ++tick_;
@@ -620,11 +650,21 @@ void World::process_worker(const entt::entity e, int& path_budget) {
     ++task_diagnostics_.workers_by_task[static_cast<std::size_t>(Task::Forage)];
     return;
   }
+  // A searcher stays a searcher while the colony still needs one. The sweep is a long walk out of
+  // a nest that now runs a good way underground, and a worker recalled every five seconds turns
+  // back before it is clear of the entrance, which is how a planted site went unfound for minutes.
+  if (registry_.get<Forager>(e).state == ForageState::Scouting && wants_scouts()) {
+    mind.task = Task::Forage;
+    process_forager(e, path_budget);
+    ++task_diagnostics_.workers_by_task[static_cast<std::size_t>(Task::Forage)];
+    return;
+  }
   if (((tick_ + registry_.get<Identity>(e).id) % 10 == 0 && tick_ >= mind.committed_until) || (mind.task == Task::Excavate && nest_plan_.idle()) || (mind.task == Task::Nurse && brood_.empty())) choose_task(e);
   ++task_diagnostics_.workers_by_task[static_cast<std::size_t>(mind.task)];
   if (cargo.kind == CargoKind::Spoil || cargo.kind == CargoKind::Corpse) { deliver_non_food(e); return; }
   if (mind.task != Task::Forage) { Forager& f = registry_.get<Forager>(e); if (f.reserved_amount > 0) release_reservation(f); f.state = ForageState::AtHome; }
-  switch (mind.task) { case Task::Forage: process_forager(e, path_budget); break; case Task::Excavate: process_excavator(e, path_budget); break; case Task::Nurse: process_nurse(e, path_budget); break; case Task::Clean: process_cleaner(e, path_budget); break; case Task::Idle: break; }
+  // An idle ant has nowhere to be, which is exactly why it is the one that gives way.
+  switch (mind.task) { case Task::Forage: process_forager(e, path_budget); break; case Task::Excavate: process_excavator(e, path_budget); break; case Task::Nurse: process_nurse(e, path_budget); break; case Task::Clean: process_cleaner(e, path_budget); break; case Task::Idle: static_cast<void>(move_one_tick(e)); break; }
 }
 
 void World::process_forager(const entt::entity e, int& path_budget) {
@@ -687,7 +727,7 @@ void World::process_scout(const entt::entity e, int& path_budget) {
     // steps keeps every leg a short walk and covers the ground between, which is how a searching
     // ant actually finds anything.
     if (here.y > kSurfaceFloor - 2) {
-      forager.scout_target = {home_.x, 31};
+      forager.scout_target = {home_.x + static_cast<int>(registry_.get<Identity>(e).id % 3ULL) - 1, 31};
     } else {
       int direction = registry_.get<Identity>(e).id % 2ULL == 0ULL ? -1 : 1;
       if (here.x < 44) direction = 1;
@@ -778,6 +818,10 @@ void World::refresh_path(const entt::entity e, int& path_budget) {
 
 bool World::move_one_tick(const entt::entity e, const int cells_per_second) {
   Movement& m = registry_.get<Movement>(e); Position& p = registry_.get<Position>(e); if (m.next_cell >= m.path.size()) return true; const GridPos next = m.path[m.next_cell]; if (!grid_.walkable(next)) return false;
+  const GridPos from = p.cell();
+  // The cell ahead only holds so many ants. The one behind waits at its own cell rather than
+  // stepping inside its neighbour, which is what makes a busy corridor a file instead of a stack.
+  if (next != from && !cell_has_room(next)) return false;
   const std::int32_t before_x = p.x_subcells;
   const std::int32_t before_y = p.y_subcells;
   m.speed_residual += cells_per_second * kSubcellsPerCell * (traits_.industry_tier >= 2 ? 110 : 100) / 100; const int travel = m.speed_residual / kTicksPerSecond; m.speed_residual %= kTicksPerSecond;
@@ -798,6 +842,11 @@ bool World::move_one_tick(const entt::entity e, const int cells_per_second) {
     remaining -= step;
   }
   if (p.x_subcells == tx && p.y_subcells == ty) ++m.next_cell;
+  const GridPos to = p.cell();
+  if (to != from) {
+    if (occupancy_[grid_index(from)] > 0) --occupancy_[grid_index(from)];
+    if (occupancy_[grid_index(to)] < std::numeric_limits<std::uint8_t>::max()) ++occupancy_[grid_index(to)];
+  }
   if (p.x_subcells != before_x || p.y_subcells != before_y) ++stats_.productive_worker_ticks;
   return m.next_cell >= m.path.size();
 }
@@ -886,7 +935,14 @@ void World::process_nurse(const entt::entity e, int& path_budget) {
     stray->carried_by = id;
     return;
   }
-  if (here != home_) { route_to(e, home_, path_budget); return; } WorkerMind& mind = registry_.get<WorkerMind>(e); if (++mind.action_ticks < kTicksPerSecond) return; mind.action_ticks = 0; if (brood_.empty()) return;
+  // A nurse takes a post among the cradles rather than standing on the queen's own cell. The post
+  // is the same one every time for a given ant, so the shift spreads over the nursery and stays
+  // spread instead of crossing it after whichever egg is neediest this second.
+  const GridPos post = nursery_cells_.empty()
+      ? home_
+      : nursery_cells_[static_cast<std::size_t>(id) % nursery_cells_.size()];
+  if (here != post) { route_to(e, post, path_budget); return; }
+  WorkerMind& mind = registry_.get<WorkerMind>(e); if (++mind.action_ticks < kTicksPerSecond) return; mind.action_ticks = 0; if (brood_.empty()) return;
   auto item = std::min_element(brood_.begin(), brood_.end(), [](const BroodSnapshot& a, const BroodSnapshot& b) { return a.care_remaining != b.care_remaining ? a.care_remaining < b.care_remaining : a.id < b.id; });
   if (item->care_remaining < 5 * kTicksPerSecond) { item->care_remaining = 5 * kTicksPerSecond; ++stats_.productive_worker_ticks; }
 }
@@ -916,8 +972,13 @@ void World::process_cleaner(const entt::entity e, int& path_budget) {
 }
 
 void World::deliver_non_food(const entt::entity e) {
-  Cargo& cargo = registry_.get<Cargo>(e); Movement& m = registry_.get<Movement>(e); const GridPos outlet{home_.x, 31};
-  if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = pathfinder_.find(grid_, registry_.get<Position>(e).cell(), outlet, 4096, bias_for(e)); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
+  Cargo& cargo = registry_.get<Cargo>(e); Movement& m = registry_.get<Movement>(e);
+  // The entrance is three cells across, so the haulers tip from all three of them rather than
+  // filing through the middle one and backing the queue down the shaft behind them.
+  const int column = home_.x + static_cast<int>(registry_.get<Identity>(e).id % 3ULL) - 1;
+  const GridPos outlet{grid_.walkable({column, 31}) ? column : home_.x, 31};
+  const GridPos standing = registry_.get<Position>(e).cell();
+  if (standing.y != 31 || std::abs(standing.x - home_.x) > 1) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = pathfinder_.find(grid_, standing, outlet, 4096, bias_for(e)); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
   // The apron is deliberately bounded, so a full one does not trap the excavator holding the grain.
   // The haul still counts as work done; the grain is recorded as overflow tipped out of view rather
   // than silently counted as mound, which is the only way the two stay reconcilable.
@@ -973,8 +1034,8 @@ void World::update_biology() {
   }
   brood_.erase(std::remove_if(brood_.begin(), brood_.end(), [this, &matured](const BroodSnapshot& item) { const bool starved = item.stage == BroodStage::Larva && item.starvation >= 180 * kTicksPerSecond; if (starved) ++stats_.deaths; return starved || std::find(matured.begin(), matured.end(), item.id) != matured.end(); }), brood_.end());
   for (std::size_t index = 0; index < matured.size(); ++index) {
-    if (matured_roles[index] == BroodRole::Gyne) { spawn_winged_queen(home_); ++stats_.gynes_born; }
-    else { spawn_worker(home_); ++stats_.workers_born; }
+    if (matured_roles[index] == BroodRole::Gyne) { spawn_winged_queen(birth_cell(matured[index])); ++stats_.gynes_born; }
+    else { spawn_worker(birth_cell(matured[index])); ++stats_.workers_born; }
   }
   if (queen_alive_ && queen_fed && tick_ + 1 >= next_laying_) { const Tick interval = static_cast<Tick>(12 * kTicksPerSecond * 100 / (100 + 15 * adaptation_levels_[3])); next_laying_ = tick_ + 1 + std::max<Tick>(1, interval); if (brood_.size() < static_cast<std::size_t>(nursery_capacity_)) {
     BroodRole role = BroodRole::Worker;
@@ -1011,6 +1072,64 @@ bool World::cell_is_occupied(const GridPos cell) const {
   for (const DroppedCargoSnapshot& dropped : dropped_food_) if (dropped.position == cell) return true;
   for (const BroodSnapshot& item : brood_) if (item.position == cell) return true;
   return false;
+}
+
+void World::refresh_occupancy() {
+  const std::size_t cells = static_cast<std::size_t>(Grid::kWidth * Grid::kHeight);
+  if (occupancy_.size() != cells) occupancy_.assign(cells, 0);
+  else std::fill(occupancy_.begin(), occupancy_.end(), std::uint8_t{0});
+  for (const entt::entity entity : ordered_entities_) {
+    std::uint8_t& count = occupancy_[grid_index(registry_.get<Position>(entity).cell())];
+    if (count < std::numeric_limits<std::uint8_t>::max()) ++count;
+  }
+}
+
+int World::ants_in(const GridPos cell) const {
+  if (!grid_.in_bounds(cell) || occupancy_.empty()) return 0;
+  return occupancy_[grid_index(cell)];
+}
+
+bool World::cell_has_room(const GridPos cell) const {
+  return grid_.in_bounds(cell) && ants_in(cell) < kMaxAntsPerCell;
+}
+
+std::optional<GridPos> World::cell_to_give_way(const GridPos cell, const EntityId bias) const {
+  // Each ant starts looking in its own direction, so a crowd fans out instead of filing into the
+  // same neighbour and re-forming there.
+  std::optional<GridPos> best;
+  int fewest = kMaxAntsPerCell;
+  for (std::size_t i = 0; i < kNeighbors.size(); ++i) {
+    const GridPos step = kNeighbors[(i + static_cast<std::size_t>(bias)) % kNeighbors.size()];
+    const GridPos next{cell.x + step.x, cell.y + step.y};
+    if (!grid_.walkable(next)) continue;
+    const int here = ants_in(next);
+    if (here < fewest) { fewest = here; best = next; }
+  }
+  return best;
+}
+
+void World::relieve_crowding() {
+  for (const entt::entity entity : ordered_entities_) {
+    if (!registry_.all_of<Movement>(entity)) continue;
+    Movement& movement = registry_.get<Movement>(entity);
+    // An ant already on its way is not standing in anybody's way for long.
+    if (movement.next_cell < movement.path.size() &&
+        movement.path_revision == grid_.navigation_revision()) continue;
+    // A worker on a carrying errand is left alone. Finishing a route is how it knows it has
+    // reached the site or the heap, and a step aside is not an arrival.
+    if (registry_.all_of<Forager>(entity)) {
+      const ForageState state = registry_.get<Forager>(entity).state;
+      if (state == ForageState::ToSource || state == ForageState::Returning ||
+          state == ForageState::Storing) continue;
+    }
+    const GridPos here = registry_.get<Position>(entity).cell();
+    if (ants_in(here) <= kMaxAntsPerCell) continue;
+    const auto aside = cell_to_give_way(here, registry_.get<Identity>(entity).id);
+    if (!aside) continue;
+    movement.path.assign(1, *aside);
+    movement.next_cell = 0;
+    movement.path_revision = grid_.navigation_revision();
+  }
 }
 
 bool World::deposit_spoil() {

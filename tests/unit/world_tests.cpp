@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <map>
 #include <set>
+#include <vector>
 #include <utility>
 
 namespace {
@@ -39,7 +41,10 @@ TEST_CASE("workers remain on passable cells and complete physical food round tri
   ant::sim::World world(7);
   // Two founding sites of 140,000 plus the founding stock the queen brought with her.
   constexpr std::int64_t initial_mass = 370'000;
-  world.run_ticks(2'400);
+  // Four minutes. A founding colony of six splits its shift between digging, nursing and foraging,
+  // and the chambers now sit a corridor apart, so the first completed trip lands well inside this
+  // window without the assertion resting on exactly where one worker happened to be at two.
+  world.run_ticks(4'800);
 
   REQUIRE(world.stats().completed_round_trips > 0);
   CHECK(world.stats().picked_up == world.stats().delivered + cargo_total(world));
@@ -239,6 +244,50 @@ TEST_CASE("roots are mined slowly and stone is never mined at all", "[world][dig
   CHECK(world.invariant_holds());
 }
 
+TEST_CASE("a cell holds a handful of ants, never the whole colony", "[world][crowding]") {
+  ant::sim::World world(42);
+  int peak = 0;
+  long long over_limit = 0;
+  long long observations = 0;
+  for (int tick = 0; tick < 12'000; ++tick) {
+    world.run_ticks(1);
+    std::map<std::pair<int, int>, int> standing;
+    for (const auto& actor : world.actors()) {
+      ++standing[{static_cast<int>(actor.x), static_cast<int>(actor.y)}];
+    }
+    for (const auto& [cell, ants] : standing) {
+      peak = std::max(peak, ants);
+      if (ants > ant::sim::kMaxAntsPerCell) ++over_limit;
+      ++observations;
+    }
+  }
+  REQUIRE(observations > 0);
+  // Nothing ever walks into a full cell. Siblings can still hatch into one, which puts a cell a
+  // little over for the tick or two it takes to drain: measured over a colony's whole life that is
+  // a peak of eight and four hundredths of one per cent of cells, against the twenty-three and up
+  // that a third of the colony used to stand in.
+  CHECK(peak <= ant::sim::kMaxAntsPerCell + 3);
+  CHECK(over_limit * 1'000 < observations);
+  CHECK(world.invariant_holds());
+}
+
+TEST_CASE("a pile of ants on one cell drains into the ground around it", "[world][crowding]") {
+  ant::sim::World world(42);
+  const ant::sim::GridPos home = world.home();
+  world.debug_spawn_workers(30);
+  const auto standing_on_home = [&] {
+    const std::vector<ant::sim::ActorSnapshot> actors = world.actors();
+    return std::count_if(actors.begin(), actors.end(), [home](const ant::sim::ActorSnapshot& actor) {
+      return static_cast<int>(actor.x) == home.x && static_cast<int>(actor.y) == home.y;
+    });
+  };
+  REQUIRE(standing_on_home() > ant::sim::kMaxAntsPerCell);
+  world.run_ticks(10 * ant::sim::kTicksPerSecond);
+  CHECK(standing_on_home() <= ant::sim::kMaxAntsPerCell);
+  CHECK(world.living_workers() >= 30);
+  CHECK(world.invariant_holds());
+}
+
 TEST_CASE("a forage site is finite and the colony scouts for the next one", "[world][forage]") {
   ant::sim::World world(5);
   // Empty the known sites and put an undiscovered one on the surface well away from the entrance.
@@ -293,9 +342,15 @@ TEST_CASE("brood and grain live in the rooms dug for them", "[world][rooms]") {
   }
   for (const ant::sim::BroodSnapshot& item : world.brood()) {
     CAPTURE(item.position.x, item.position.y);
-    // Lying in a brood room, still beside the queen who laid it, or in a nurse's mandibles.
+    // Lying in a brood room, in a nurse's mandibles, or waiting to be fetched from somewhere
+    // between the queen who laid it and the nursery she laid it for. Never out in the granaries or
+    // the far tunnels, which is what this is guarding: the queen walks her chamber, so a new egg is
+    // wherever she happened to be, and a nurse whose cradles are all taken sets its load down where
+    // it stands rather than carrying it around the nest.
+    const int from_queen = std::abs(item.position.x - world.home().x) +
+                           std::abs(item.position.y - world.home().y);
     CHECK((owns(item.position, ant::sim::RoomKind::Nursery) || item.carried_by != 0 ||
-           item.position == world.home()));
+           from_queen <= ant::sim::kNurseryReach / 3));
   }
   CHECK(world.invariant_holds());
 }

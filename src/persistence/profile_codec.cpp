@@ -118,7 +118,8 @@ json actor_json(const sim::ActorState& a) {
   json result={{"id",a.identity.id},{"kind",enum_value(a.ant.kind)},{"worker",a.worker},
     {"position",{{"x",a.position.x_subcells},{"y",a.position.y_subcells},{"previous_x",a.position.previous_x_subcells},{"previous_y",a.position.previous_y_subcells}}},
     {"cargo",{{"kind",enum_value(a.cargo.kind)},{"nutrient",enum_value(a.cargo.nutrient)},{"amount",a.cargo.amount},{"entity_id",a.cargo.entity_id}}}};
-  if (a.worker || a.ant.kind == sim::AntKind::Queen) {
+  {
+    // Every ant walks, gynes included, so every actor carries its route.
     json path=json::array(); for (const auto p:a.movement.path) path.push_back(position_json(p));
     result["movement"]={{"path",std::move(path)},{"next_cell",a.movement.next_cell},{"path_revision",a.movement.path_revision},{"speed_residual",a.movement.speed_residual},{"path_valid",a.path_valid}};
   }

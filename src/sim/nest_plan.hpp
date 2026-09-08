@@ -17,21 +17,29 @@ namespace ant::sim {
 
 // Excavation envelope: never break the surface, and stay within reach of home.
 inline constexpr int kSurfaceFloor = 34;
-inline constexpr int kDigRadius = 96;
+inline constexpr int kDigRadius = 112;
 // Nurses have to walk to the brood, so brood rooms stay within reach of the queen.
-inline constexpr int kNurseryReach = 46;
+inline constexpr int kNurseryReach = 56;
 // A room opens at this radius and may be widened to this one before the colony sites another.
 // Chambers are small: a colony ends up with many pockets joined by passages rather than a few
 // caverns. This is a game geometry rule, not a species-specific biological claim.
 inline constexpr int kRoomStartRadius = 3;
 inline constexpr int kRoomMaxRadius = 5;
+// Solid ground every chamber keeps between its own rim and the rim of every other chamber. Two
+// pockets closer than this are one cavity with a waist, not two rooms, so the colony refuses to
+// site or widen a room that would come nearer. Nothing else does more to decide the shape of the
+// nest: the wider this is, the further apart the chambers sit and the more corridor the colony has
+// to cut to join them, which is what turns a compact warren into a long branching farm.
+inline constexpr int kRoomSeparation = 9;
 // Corridor cross-section, in cells, measured across its run.
 inline constexpr int kCorridorWidth = 3;
-inline constexpr std::size_t kMaxRooms = 26;
+inline constexpr std::size_t kMaxRooms = 36;
 inline constexpr std::size_t kMaxPassages = kMaxRooms * 2;
 inline constexpr std::size_t kMaxPassageLength = 256;
-// Workers that may cut the same project at once.
-inline constexpr int kDiggersPerProject = 4;
+// Workers that may cut the same project at once. A chamber now sits at the end of a real corridor
+// rather than next door, and every grain cut has to be carried up to the surface, so a bigger crew
+// is what keeps the nest growing at the rate it used to.
+inline constexpr int kDiggersPerProject = 6;
 
 enum class RoomKind : std::uint8_t { Nursery, Granary };
 

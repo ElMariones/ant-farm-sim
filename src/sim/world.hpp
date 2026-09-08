@@ -24,6 +24,16 @@ inline constexpr std::size_t kMaxFoodSources = 8;
 inline constexpr int kDiscoveryReach = 6;
 // The queen is heavy and unhurried.
 inline constexpr int kQueenSpeed = 2;
+// A cell is a place, not a bucket. No more than this many ants stand in one at a time: the ant
+// behind waits for the cell ahead to clear, and a crowd that has already formed shuffles out of it.
+// Without a limit roughly a third of the colony stood in cells of twenty-three and more, and the
+// nest read as one ant on one pixel.
+//
+// Six rather than a tighter number because a nest is one shared set of corridors: at three the
+// queue at the granaries and the entrance throttled the food supply until the colony starved, and
+// at five it was still on that edge. At six the colony ends a full hour with the population,
+// excavation and stores it had before the limit existed, while nothing over six is ever drawn.
+inline constexpr int kMaxAntsPerCell = 6;
 // How long the colony keeps steering foragers onto a freshly discovered site.
 inline constexpr Tick kRecruitmentTicks = 90 * kTicksPerSecond;
 // A site nobody has found rots away rather than holding a slot for ever.
@@ -277,6 +287,19 @@ private:
   // left to put it.
   bool deposit_spoil();
   [[nodiscard]] bool cell_is_occupied(GridPos cell) const;
+  // Ants standing in each cell. Rebuilt at the top of every tick and kept exact as ants step, so
+  // it is derived state a save never has to carry.
+  void refresh_occupancy();
+  [[nodiscard]] int ants_in(GridPos cell) const;
+  [[nodiscard]] bool cell_has_room(GridPos cell) const;
+  // The neighbouring cell with the most space, for an ant that has to give way.
+  [[nodiscard]] std::optional<GridPos> cell_to_give_way(GridPos cell, EntityId bias) const;
+  // Sends any ant standing in an over-full cell one step into a neighbour, so a crowd left by a
+  // hatch, a delivery or a collapse drains instead of staying a stack.
+  void relieve_crowding();
+  // Where a callow emerges: the queen's cell, or the next one along when hers is full.
+  [[nodiscard]] GridPos birth_cell(EntityId bias) const;
+  void note_arrival(GridPos cell);
   void update_maturity();
   void refresh_dig_claims();
   void release_dig_claim(const WorkerMind& mind);
@@ -304,6 +327,7 @@ private:
   NestPlan nest_plan_;
   std::uint64_t rooms_version_{1};
   std::vector<std::uint16_t> dig_work_;
+  std::vector<std::uint8_t> occupancy_;
   std::vector<BroodSnapshot> brood_;
   std::vector<CorpseSnapshot> corpses_;
   std::vector<DroppedCargoSnapshot> dropped_food_;

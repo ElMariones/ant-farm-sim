@@ -170,6 +170,43 @@ TEST_CASE("a founding colony builds only what it needs and its nest stays connec
   CHECK(world.invariant_holds());
 }
 
+TEST_CASE("chambers keep solid ground between them", "[nest]") {
+  // Every pair, from the founding layout through everything the colony sites and widens for
+  // itself. A chamber that came nearer than this would join its neighbour into one cavity, which
+  // is the difference between a nest of rooms on corridors and a single hollowed-out warren.
+  const auto separated = [](const std::vector<Room>& rooms) {
+    for (std::size_t a = 0; a < rooms.size(); ++a) {
+      for (std::size_t b = a + 1; b < rooms.size(); ++b) {
+        const int dx = rooms[a].centre.x - rooms[b].centre.x;
+        const int dy = rooms[a].centre.y - rooms[b].centre.y;
+        const int clearance = rooms[a].radius + rooms[b].radius + ant::sim::kRoomSeparation;
+        if (dx * dx + dy * dy < clearance * clearance) return false;
+      }
+    }
+    return true;
+  };
+
+  World world(7);
+  REQUIRE(world.rooms().size() >= 2);
+  CHECK(separated(world.rooms()));
+  world.run_ticks(30'000);
+  CHECK(separated(world.rooms()));
+
+  // And a colony with room to build puts its next chamber that far out rather than beside the
+  // one it has, so joining the two is a corridor the ants have to cut.
+  NestPlan plan;
+  Grid open(Material::Air);
+  const GridPos first{kHome.x, kHome.y + 14};
+  plan.found({first, kRoomMaxRadius, RoomKind::Nursery, true});
+  plan.update(open, kHome, 42, true, false);
+  REQUIRE(plan.rooms().size() == 2);
+  const Room& sited = plan.rooms().back();
+  const int dx = sited.centre.x - first.x;
+  const int dy = sited.centre.y - first.y;
+  const int clearance = sited.radius + kRoomMaxRadius + ant::sim::kRoomSeparation;
+  CHECK(dx * dx + dy * dy >= clearance * clearance);
+}
+
 TEST_CASE("the excavation envelope keeps the nest underground", "[nest]") {
   CHECK_FALSE(within_envelope({kHome.x, ant::sim::kSurfaceFloor}, kHome));
   CHECK(within_envelope({kHome.x, ant::sim::kSurfaceFloor + 1}, kHome));

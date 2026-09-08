@@ -2,7 +2,74 @@
 
 Updated: 2026-09-08.
 
-## Latest session — T015a: smooth 20x play
+## Latest session — T014j: a cell holds a few ants, and rooms sit a corridor apart
+
+Two owner requests, from the same complaint that the nest reads as one crowded blob.
+
+**A limit on how many ants stand in one cell.** `World` now keeps a derived per-cell occupancy
+count, rebuilt at the top of every tick and kept exact as ants step. An ant will not walk into a
+cell already holding `kMaxAntsPerCell`; it waits at its own cell instead. Anything standing in an
+over-full cell and not mid-errand is given a step into the emptiest neighbour, so crowds that form
+drain rather than persist. Three convergence points that the old code funnelled the whole colony
+through were opened up: nurses now take a stable post among the cradles instead of all standing on
+the queen's cell, spoil haulers tip from any of the three entrance columns instead of one, and a
+callow emerges beside the queen when her own cell is full rather than on top of her. Winged queens
+gained a `Movement` so they can step aside too; every actor now carries its route through a save.
+
+The limit is six, not three. A nest is one shared set of corridors: at three the queue at the
+granaries and entrance throttled the food supply and the colony starved inside an hour, and five was
+still on that edge. At six the colony ends a long run with the population, excavation and stores it
+had before the limit existed.
+
+**Chambers keep ground between them.** New `kRoomSeparation` (9 cells) replaces the old clearance of
+3 in both room siting and widening, so a room the colony sites or widens stays a real corridor away
+from every other. The founding four rooms were respaced to match — otherwise the generator's own
+layout would have blocked the very first widening. `kDigRadius` 96 -> 112, `kNurseryReach` 46 -> 56
+and `kMaxRooms` 26 -> 36 give the wider nest somewhere to go; `kDiggersPerProject` 4 -> 6 keeps it
+growing at the old rate now that every chamber sits at the end of a real corridor. Scouts are no
+longer recalled to another task mid-sweep while the colony still wants one — the walk out of a
+bigger nest is long enough that a five-second commitment turned them back at the entrance, and a
+planted site went unfound for minutes.
+
+Measured, seeds 7/42/99, 60,000 ticks (50 minutes of play), against the previous executable:
+
+- Share of ants standing in a cell of 23 or more: **28-32% -> none**. Worst cell ever seen over a
+  colony's whole life **115 -> 8**, and over-limit cells are 0.009% of observations (a batch of
+  siblings hatching, drained within a tick or two).
+- Nest extent **65x56 -> 88-95 x 64 cells**, connected nest air 694 -> 785-796, passages 7 -> 7-8.
+  At 120,000 ticks, extent 105x64 and 10 rooms.
+- Population and economy hold: 143-147 living workers against 144-147 before; cells excavated
+  370-381 against 356-392; stores healthy on every seed checked.
+- Room count over the same wall clock is slightly lower (7-8 against 9) because each chamber now
+  costs a corridor. The farm is larger; the chambers are fewer and further apart, which is the trade
+  the request asked for.
+
+Verification on Apple Silicon macOS, Apple Clang, Debug `dev` preset:
+
+- `cmake --build --preset dev -j 8` and `cmake --build --preset release -j 8`: pass.
+- `./build/dev/ant_tests`: **41,618 assertions in 151 cases pass**, including three new cases —
+  a cell never holds more than the limit over 12,000 ticks, a forced pile of thirty ants on one cell
+  drains within ten seconds, and every pair of chambers keeps its separation from the founding
+  layout through 30,000 ticks of building.
+- `./build/release/ant_benchmark --seed 42 --warmup 30000 --ticks 6000`, three runs each:
+  **0.49-0.72 ms per 20x frame against 0.31-0.66 ms** before, p95 tick 0.23-0.33 ms against
+  0.21-0.33 ms. Same envelope; the machine was under load and single runs vary more than the change
+  does.
+
+Two existing tests were widened rather than left over-fitted, and neither guarded behaviour that
+changed: the physical-round-trip test ran 2,400 ticks, a window seed 2 already missed on the old
+code, and now runs 4,800; the brood-location test allowed a stray egg only on the queen's exact
+cell, though she walks her chamber and a nurse with no free cradle sets its load down where it
+stands — it now allows anywhere between her and the nursery, which the old code exceeded by more
+than the new one does.
+
+Save format is unchanged at schema 4 and the codec addition is additive, so old profiles load. A
+profile saved before this change keeps its old room positions, which no longer satisfy the
+separation; those rooms are left exactly as they are and simply stop being widened, and the colony
+builds outward instead. No visual QA or live restart was performed this session, per the owner's
+standing preference for console verification.
+
+## Earlier session — T015a: smooth 20x play
 
 Profiled the owner's running Debug game on Apple M5. Major costs included allocating full-grid A*
 arrays per route and rebuilding the entire detailed terrain texture. World-owned reusable search
