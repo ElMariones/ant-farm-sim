@@ -39,6 +39,28 @@ private:
   std::uint64_t revision_{};
 };
 
+// Reusable scratch owned by one World. Search stamps initialize only visited cells; neither
+// topology nor route decisions are cached. Interleaved worlds therefore cannot share stale work.
+class Pathfinder {
+public:
+  [[nodiscard]] PathResult find(const Grid& grid, GridPos start, GridPos goal,
+                                 std::size_t expansion_budget = 4096, RouteBias bias = {});
+private:
+  struct OpenNode {
+    int f{}, g{};
+    std::size_t index{};
+    std::uint64_t order{};
+  };
+  struct Greater {
+    bool operator()(const OpenNode& lhs, const OpenNode& rhs) const;
+  };
+  std::vector<int> costs_;
+  std::vector<std::size_t> parents_;
+  std::vector<std::uint32_t> stamps_;
+  std::vector<OpenNode> open_;
+  std::uint32_t search_{};
+};
+
 [[nodiscard]] PathResult find_path(const Grid& grid, GridPos start, GridPos goal,
                                    std::size_t expansion_budget = 4096, RouteBias bias = {});
 [[nodiscard]] bool is_connected(const Grid& grid, GridPos start, GridPos goal);

@@ -133,6 +133,10 @@ private:
   bool terrain_texture_ready_{};
   std::uint64_t terrain_revision_{};
   std::uint64_t rooms_key_{};
+  std::uint64_t baked_seed_{};
+  std::vector<Color> terrain_pixels_;
+  std::vector<Color> terrain_upload_;
+  std::vector<sim::Room> baked_rooms_;
   // What the world looked like at the last bake, so a fresh cut can be spotted and puffed.
   std::vector<sim::Material> baked_terrain_;
   std::vector<std::int64_t> pile_amounts_;

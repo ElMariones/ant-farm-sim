@@ -113,60 +113,54 @@ std::vector<GridPos> HomeField::path_home(const Grid& grid, const GridPos start,
   return path;
 }
 
-PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
-                     const std::size_t expansion_budget, const RouteBias bias) {
-  if (!grid.walkable(start) || !grid.walkable(goal)) {
-    return {};
-  }
-  if (start == goal) {
-    return {PathStatus::Complete, {}, 0};
-  }
+bool Pathfinder::Greater::operator()(const OpenNode& lhs, const OpenNode& rhs) const {
+  if (lhs.f != rhs.f) return lhs.f > rhs.f;
+  if (lhs.g != rhs.g) return lhs.g > rhs.g;
+  return lhs.order > rhs.order;
+}
 
-  struct OpenNode {
-    int f{};
-    int g{};
-    std::size_t index{};
-    // Settles which of two equally good nodes is expanded first. Whichever predecessor gets there
-    // first claims the parent pointer, so this is the knob that decides which equally short route
-    // an ant ends up committed to. Cell index for the canonical order, this ant's stable
-    // preference otherwise.
-    std::uint64_t order{};
-  };
-  struct Greater {
-    bool operator()(const OpenNode& lhs, const OpenNode& rhs) const {
-      if (lhs.f != rhs.f) {
-        return lhs.f > rhs.f;
-      }
-      if (lhs.g != rhs.g) {
-        return lhs.g > rhs.g;
-      }
-      return lhs.order > rhs.order;
-    }
-  };
+PathResult Pathfinder::find(const Grid& grid, const GridPos start, const GridPos goal,
+                            const std::size_t expansion_budget, const RouteBias bias) {
+  if (!grid.walkable(start) || !grid.walkable(goal)) return {};
+  if (start == goal) return {PathStatus::Complete, {}, 0};
   const auto ordering = [bias](const GridPos cell, const std::size_t index) {
     return bias.key == 0 ? static_cast<std::uint64_t>(index) : preference(bias.key, cell);
   };
 
-  constexpr int kInfinity = std::numeric_limits<int>::max();
   const std::size_t cell_count = static_cast<std::size_t>(Grid::kWidth * Grid::kHeight);
-  std::vector<int> costs(cell_count, kInfinity);
-  std::vector<std::size_t> parents(cell_count, cell_count);
-  std::priority_queue<OpenNode, std::vector<OpenNode>, Greater> open;
+  if (stamps_.empty()) {
+    costs_.resize(cell_count);
+    parents_.resize(cell_count);
+    stamps_.resize(cell_count);
+    open_.reserve(256);
+  }
+  if (++search_ == 0) { // Unsigned wrap cannot make an ancient search look current.
+    std::fill(stamps_.begin(), stamps_.end(), 0);
+    search_ = 1;
+  }
+  open_.clear();
+  const auto push = [this](OpenNode node) {
+    open_.push_back(node);
+    std::push_heap(open_.begin(), open_.end(), Greater{});
+  };
   const std::size_t start_index = index_of(start);
   const std::size_t goal_index = index_of(goal);
-  costs[start_index] = 0;
-  open.push({heuristic(start, goal), 0, start_index, ordering(start, start_index)});
+  costs_[start_index] = 0;
+  stamps_[start_index] = search_;
+  parents_[start_index] = cell_count;
+  push({heuristic(start, goal), 0, start_index, ordering(start, start_index)});
 
   std::size_t expanded = 0;
-  while (!open.empty()) {
-    const OpenNode node = open.top();
-    open.pop();
-    if (node.g != costs[node.index]) {
+  while (!open_.empty()) {
+    std::pop_heap(open_.begin(), open_.end(), Greater{});
+    const OpenNode node = open_.back();
+    open_.pop_back();
+    if (node.g != costs_[node.index]) {
       continue;
     }
     if (node.index == goal_index) {
       std::vector<GridPos> reversed;
-      for (std::size_t cursor = goal_index; cursor != start_index; cursor = parents[cursor]) {
+      for (std::size_t cursor = goal_index; cursor != start_index; cursor = parents_[cursor]) {
         if (cursor == cell_count) {
           return {PathStatus::Unreachable, {}, expanded};
         }
@@ -187,16 +181,23 @@ PathResult find_path(const Grid& grid, const GridPos start, const GridPos goal,
       }
       const std::size_t neighbor_index = index_of(neighbor);
       const int new_cost = node.g + 1;
-      if (new_cost >= costs[neighbor_index]) {
+      if (stamps_[neighbor_index] == search_ && new_cost >= costs_[neighbor_index]) {
         continue;
       }
-      costs[neighbor_index] = new_cost;
-      parents[neighbor_index] = node.index;
-      open.push({new_cost + heuristic(neighbor, goal), new_cost, neighbor_index,
+      stamps_[neighbor_index] = search_;
+      costs_[neighbor_index] = new_cost;
+      parents_[neighbor_index] = node.index;
+      push({new_cost + heuristic(neighbor, goal), new_cost, neighbor_index,
                  ordering(neighbor, neighbor_index)});
     }
   }
   return {PathStatus::Unreachable, {}, expanded};
+}
+
+PathResult find_path(const Grid& grid, GridPos start, GridPos goal,
+                     std::size_t expansion_budget, RouteBias bias) {
+  Pathfinder scratch;
+  return scratch.find(grid, start, goal, expansion_budget, bias);
 }
 
 bool is_connected(const Grid& grid, const GridPos start, const GridPos goal) {

@@ -172,7 +172,7 @@ void World::process_queen(int& path_budget) {
   if (!target || *target == here) { queen_settle_ = tick_ + 5 * kTicksPerSecond; return; }
   --path_budget;
   ++stats_.path_requests;
-  const PathResult path = find_path(grid_, here, *target, 2048, bias_for(queen));
+  const PathResult path = pathfinder_.find(grid_, here, *target, 2048, bias_for(queen));
   stats_.path_expansions += path.expanded;
   if (path.status == PathStatus::Complete) {
     movement.path = path.cells;
@@ -744,7 +744,7 @@ bool World::choose_source(const entt::entity e, int& path_budget) {
     const std::int64_t reservation = std::min<std::int64_t>({carry_capacity, source.amount - source.reserved, room});
     if (reservation <= 0) continue;
     source.reserved += reservation; f.source_id = source.id; f.reserved_amount = reservation; f.reservation_expiry = tick_ + 1'200; ++stats_.path_requests; --path_budget;
-    const PathResult path = find_path(grid_, start, source.position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
+    const PathResult path = pathfinder_.find(grid_, start, source.position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
     if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); f.state = ForageState::ToSource; return true; }
     release_reservation(f);
     f.retry_after = tick_ + 200;
@@ -771,7 +771,7 @@ void World::refresh_path(const entt::entity e, int& path_budget) {
   const FoodSource* source = find_source(f.source_id);
   if (source == nullptr) { release_reservation(f); f.state = ForageState::AtHome; f.retry_after = tick_ + 40; return; }
   ++stats_.path_requests; --path_budget;
-  const PathResult path = find_path(grid_, start, source->position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
+  const PathResult path = pathfinder_.find(grid_, start, source->position, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
   if (path.status == PathStatus::Complete) { m.path = path.cells; m.path_revision = grid_.navigation_revision(); }
   else { release_reservation(f); f.state = ForageState::AtHome; f.retry_after = tick_ + 200; }
 }
@@ -831,7 +831,7 @@ void World::release_reservation(Forager& f) {
 
 void World::route_to(const entt::entity e, const GridPos target, int& path_budget) {
   Movement& m = registry_.get<Movement>(e); if (m.next_cell < m.path.size() && m.path_revision == grid_.navigation_revision()) { static_cast<void>(move_one_tick(e)); return; }
-  if (registry_.get<Position>(e).cell() == target || path_budget <= 0) return; ++stats_.path_requests; --path_budget; const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), target, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
+  if (registry_.get<Position>(e).cell() == target || path_budget <= 0) return; ++stats_.path_requests; --path_budget; const PathResult path = pathfinder_.find(grid_, registry_.get<Position>(e).cell(), target, 4096, bias_for(e)); stats_.path_expansions += path.expanded;
   if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); static_cast<void>(move_one_tick(e)); }
 }
 
@@ -917,7 +917,7 @@ void World::process_cleaner(const entt::entity e, int& path_budget) {
 
 void World::deliver_non_food(const entt::entity e) {
   Cargo& cargo = registry_.get<Cargo>(e); Movement& m = registry_.get<Movement>(e); const GridPos outlet{home_.x, 31};
-  if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = find_path(grid_, registry_.get<Position>(e).cell(), outlet, 4096, bias_for(e)); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
+  if (registry_.get<Position>(e).cell() != outlet) { if (m.next_cell >= m.path.size() || m.path_revision != grid_.navigation_revision()) { const PathResult path = pathfinder_.find(grid_, registry_.get<Position>(e).cell(), outlet, 4096, bias_for(e)); if (path.status == PathStatus::Complete) { m.path = path.cells; m.next_cell = 0; m.path_revision = grid_.navigation_revision(); } } static_cast<void>(move_one_tick(e)); return; }
   // The apron is deliberately bounded, so a full one does not trap the excavator holding the grain.
   // The haul still counts as work done; the grain is recorded as overflow tipped out of view rather
   // than silently counted as mound, which is the only way the two stay reconcilable.

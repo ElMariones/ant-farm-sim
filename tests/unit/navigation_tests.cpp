@@ -118,3 +118,26 @@ TEST_CASE("an unbiased route keeps the canonical order fixtures rely on", "[navi
   CHECK(ant::sim::find_path(grid, home, {30, 58}).cells ==
         ant::sim::find_path(grid, home, {30, 58}, 4096, ant::sim::RouteBias{}).cells);
 }
+
+TEST_CASE("reused pathfinding scratch preserves routes across unrelated searches", "[navigation][performance]") {
+  auto first = ant::sim::generate_terrain(42);
+  auto second = ant::sim::generate_terrain(7);
+  ant::sim::Pathfinder reused;
+  for (std::uint64_t actor = 1; actor <= 32; ++actor) {
+    const auto bias = ant::sim::route_bias(42, actor);
+    for (const std::size_t budget : {std::size_t{0}, std::size_t{1}, std::size_t{4096}}) {
+      const auto expected = ant::sim::find_path(first.grid, first.home, first.source_positions[0], budget, bias);
+      const auto actual = reused.find(first.grid, first.home, first.source_positions[0], budget, bias);
+      CHECK(actual.status == expected.status);
+      CHECK(actual.expanded == expected.expanded);
+      CHECK(actual.cells == expected.cells);
+      static_cast<void>(reused.find(second.grid, second.source_positions[1], second.home, 10, bias));
+    }
+  }
+  // Early-return queries and a newly blocked cell cannot leave a usable old predecessor chain.
+  CHECK(reused.find(first.grid, first.home, first.home).cells.empty());
+  first.grid.set(first.source_positions[0], ant::sim::Material::Stone);
+  CHECK(reused.find(first.grid, first.home, first.source_positions[0]).status == ant::sim::PathStatus::Unreachable);
+  const auto actual = reused.find(second.grid, second.home, second.source_positions[0]);
+  CHECK(actual.cells == ant::sim::find_path(second.grid, second.home, second.source_positions[0]).cells);
+}

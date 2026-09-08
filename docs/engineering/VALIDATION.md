@@ -77,3 +77,11 @@ These commands are implemented; record which were actually run for each change. 
 ## Release evidence
 
 Complete the required ART_AND_UX scenes, one full manual generation loop, restart/recovery tests, fixed-seed pacing report, measured performance and soak, packaged launch outside cwd, attribution inventory, and README accuracy. Outstanding defects that break saving, duplicate currency, or trap normal progression block release. Cosmetic issues can be documented explicitly.
+
+## T015a comparative CPU tooling
+
+`ant_benchmark --seed 42 --warmup 30000 --ticks 6000` runs without graphics or profile I/O and emits
+JSON tick percentiles plus view-building cost at the 20x/60-Hz workload. Its short result is useful
+for before/after optimization and deterministic state comparisons, not a substitute for the full
+integrated frame, population, memory, save and soak gates above. Recorded measurements and limits:
+[PERFORMANCE_REPORT](../planning/PERFORMANCE_REPORT.md).

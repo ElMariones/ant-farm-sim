@@ -1,3 +1,4 @@
+#include "presentation/terrain_damage.hpp"
 #include "presentation/renderer.hpp"
 
 #include "sim/grid.hpp"
@@ -572,7 +573,7 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
                 1099511628211ULL;
   }
   if (terrain_texture_ready_ && terrain_revision_ == view.terrain_revision &&
-      rooms_key_ == rooms_key) {
+      rooms_key_ == rooms_key && baked_seed_ == view.seed) {
     return;
   }
   const double now = GetTime();
@@ -581,8 +582,10 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
 
   const int width = view.grid_width * kTerrainDetail;
   const int height = view.grid_height * kTerrainDetail;
-  Image image = GenImageColor(width, height, kSky);
-  auto* pixels = static_cast<Color*>(image.data);
+  const bool full_bake = !terrain_texture_ready_ || baked_seed_ != view.seed;
+  const TerrainDamage damage = terrain_damage(baked_terrain_, view.terrain, baked_rooms_, view.rooms, full_bake);
+  terrain_pixels_.resize(static_cast<std::size_t>(width * height));
+  auto* pixels = terrain_pixels_.data();
 
   const auto material_at = [&view](const int x, const int y) {
     if (x < 0 || y < 0 || x >= view.grid_width || y >= view.grid_height) return sim::Material::Bedrock;
@@ -609,6 +612,7 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
     const float depth = std::clamp(static_cast<float>(cell_y - 32) / 170.0F, 0.0F, 1.0F);
     const int depth_shade = -static_cast<int>(depth * depth * 22.0F);
     for (int cell_x = 0; cell_x < view.grid_width; ++cell_x) {
+      if (!damage.includes(cell_x, cell_y)) continue;
       // A gentle darkening toward the left and right rims, so the diorama sits in its frame.
       const int rim = -static_cast<int>(
           std::max(0.0F, 1.0F - static_cast<float>(std::min(cell_x, view.grid_width - 1 - cell_x)) /
@@ -631,11 +635,12 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
                                      (is_solid(cell_x, cell_y - 1) ? 1 : 0)
                                : 0;
 
+      const Color base_color = material_color(material, cell_x, cell_y, view.seed);
       for (int sub_y = 0; sub_y < kTerrainDetail; ++sub_y) {
         for (int sub_x = 0; sub_x < kTerrainDetail; ++sub_x) {
           const int px = cell_x * kTerrainDetail + sub_x;
           const int py = cell_y * kTerrainDetail + sub_y;
-          Color color = material_color(material, cell_x, cell_y, view.seed);
+          Color color = base_color;
           if (solid) {
             const std::uint64_t noise = hash_pixel(px, py, view.seed);
             // Sparse flecks rather than uniform static, so the soil has grain without fizzing.
@@ -691,10 +696,32 @@ void Renderer::refresh_terrain_texture(const game::GameView& view) {
   }
   baked_terrain_ = view.terrain;
 
-  if (terrain_texture_ready_) UnloadTexture(terrain_texture_);
-  terrain_texture_ = LoadTextureFromImage(image);
-  SetTextureFilter(terrain_texture_, TEXTURE_FILTER_POINT);
-  UnloadImage(image);
+  if (!terrain_texture_ready_) {
+    // Borrow CPU pixels for upload; vector ownership remains here, never with UnloadImage.
+    const Image image{terrain_pixels_.data(), width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    terrain_texture_ = LoadTextureFromImage(image);
+    SetTextureFilter(terrain_texture_, TEXTURE_FILTER_POINT);
+  } else {
+    constexpr int chunk_pixels = sim::Grid::kChunkSize * kTerrainDetail;
+    for (int cy = 0; cy < sim::Grid::kChunkRows; ++cy) {
+      for (int cx = 0; cx < sim::Grid::kChunkColumns; ++cx) {
+        if (!damage.chunks[static_cast<std::size_t>(cy * sim::Grid::kChunkColumns + cx)]) continue;
+        const int x = cx * chunk_pixels, y = cy * chunk_pixels;
+        const int update_width = std::min(chunk_pixels, width - x);
+        const int update_height = std::min(chunk_pixels, height - y);
+        terrain_upload_.resize(static_cast<std::size_t>(update_width * update_height));
+        for (int row = 0; row < update_height; ++row) {
+          std::copy_n(terrain_pixels_.data() + (y + row) * width + x, update_width,
+                      terrain_upload_.data() + row * update_width);
+        }
+        UpdateTextureRec(terrain_texture_, {static_cast<float>(x), static_cast<float>(y),
+                         static_cast<float>(update_width), static_cast<float>(update_height)},
+                         terrain_upload_.data());
+      }
+    }
+  }
+  baked_rooms_ = view.rooms;
+  baked_seed_ = view.seed;
   terrain_texture_ready_ = true;
   terrain_revision_ = view.terrain_revision;
   rooms_key_ = rooms_key;

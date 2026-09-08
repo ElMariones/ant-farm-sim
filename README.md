@@ -29,10 +29,22 @@ The implemented stack is **C++20, raylib, EnTT, CMake, Catch2, and nlohmann/json
 Requirements: CMake 3.25+, a C++20 compiler, Git, and network access for the first configure. The tested macOS generator is Unix Makefiles, so Ninja is optional.
 
 ```sh
+cmake --preset release
+cmake --build --preset release
+./build/release/ant_farm --seed 42
+```
+
+For normal play on macOS, double-click **[play.command](play.command)**. It builds and starts the
+optimized Release game from any working directory. Close a running game normally before relaunching
+so it saves your colony and releases the profile lock. Debug builds are intended for development
+and can be considerably slower at 20x.
+
+For debugging and tests, retain the separate `dev` preset:
+
+```sh
 cmake --preset dev
 cmake --build --preset dev
 ctest --preset dev
-./build/dev/ant_farm --seed 42
 ```
 
 The colony is drawn as a real cross-section. Roots run down from the turf and can be mined, slowly — four times the cost of soil — while scattered stone lenses through the deep ground can never be removed and passages have to bend around them.
@@ -98,6 +110,16 @@ For an optimized build:
 cmake --preset release
 cmake --build --preset release
 ```
+
+A reproducible CPU benchmark is available without opening the game or touching your save:
+
+```sh
+./build/release/ant_benchmark --seed 42 --warmup 30000 --ticks 6000
+```
+
+It reports tick percentiles and the combined simulation/view cost at the 20x/60-FPS workload.
+It excludes GPU rendering, autosaves and frame pacing; it is not an FPS measurement. See the
+[20x performance report](docs/planning/PERFORMANCE_REPORT.md) for measured changes and limits.
 
 Diagnostic desktop arguments include `--width`, `--height`, `--zoom`, `--fast-forward`, `--start-paused`, `--screenshot`, `--exit-after-screenshot`, `--fps`, `--display-metrics`, `--save-dir`, and `--config`. raylib writes `--screenshot` paths relative to the working directory. Generated builds and screenshots are not source artifacts.
 

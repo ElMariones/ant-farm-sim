@@ -36,11 +36,7 @@ void Session::step() {
 void Session::step_ticks(const sim::Tick count) { for (sim::Tick tick = 0; tick < count; ++tick) step(); }
 
 bool Session::focus_available() const {
-  int workers = 0;
-  for (const sim::ActorSnapshot& actor : world_.actors()) {
-    workers += actor.kind == sim::AntKind::Worker ? 1 : 0;
-  }
-  return workers >= 12;
+  return world_.living_workers() >= 12;
 }
 
 bool Session::set_focus(const sim::Focus focus) {

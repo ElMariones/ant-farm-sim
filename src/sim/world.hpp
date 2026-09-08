@@ -289,6 +289,7 @@ private:
   Grid grid_;
   GridPos home_{};
   HomeField home_field_;
+  Pathfinder pathfinder_;
   std::vector<FoodSource> sources_;
   FoodStore stores_{60'000, 30'000, 200'000, 100'000};
   WorldStats stats_{};

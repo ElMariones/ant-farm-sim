@@ -85,3 +85,15 @@ there is no completion payout and no passive reward for planning. Focus influenc
 labor is available. Geometry and logistics affect future state, so schema 4 stores passages and
 migrates older saves without promising cross-version hash equality. Limits and focused acceptance
 are in NEST_NETWORK and STATUS; full balance and native visual acceptance remain open.
+
+## D024 — Reuse computation buffers and update damaged terrain for 20x (2026-09-08)
+
+A live sample of the owner's Debug game identified full-grid A* scratch initialization and full
+terrain texture rebuilding as major costs. T015a replaces per-route arrays with World-owned stamped
+scratch and per-bake texture allocation with retained pixels/texture and dirty chunk uploads.
+Path ordering, budgets, tick scheduling, gameplay, save format and the honest limiter are unchanged.
+A small graphics-free damage helper covers shading neighbors and changed room geometry in tests.
+
+Normal play defaults to the Release build through `play.command`; Debug remains available for
+development. Short comparative CPU measurements and exact-state checks are recorded in
+PERFORMANCE_REPORT; they do not close the integrated T015 population/GPU/memory/soak gate.

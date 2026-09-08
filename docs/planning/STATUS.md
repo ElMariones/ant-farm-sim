@@ -2,7 +2,40 @@
 
 Updated: 2026-09-08.
 
-## Latest session — T014i: a connected working nest
+## Latest session — T015a: smooth 20x play
+
+Profiled the owner's running Debug game on Apple M5. Major costs included allocating full-grid A*
+arrays per route and rebuilding the entire detailed terrain texture. World-owned reusable search
+scratch now initializes only visited cells, retaining exactly the old route ordering and budgets.
+Terrain keeps its texture/pixels and repaints/uploads only affected 32x32 chunks with neighbor halos
+and old/new room bounds. Focus eligibility no longer allocates another actor snapshot per view.
+
+Normal play now defaults to Release in README and executable `play.command`. Both Debug and Release
+binaries are built. The already-running Debug process was sampled read-only and left untouched;
+it must be closed normally and relaunched to use the new code. The limiter itself, whole-tick
+scheduling, gameplay and schema are unchanged.
+
+Measured seed 42 at 30,000 warm-up + 6,000 measured ticks, 110–130 workers:
+
+- Debug simulation + view cost per 20x/60-Hz frame: **14.700 -> 3.181 ms (4.62x faster)**.
+- Debug p95 tick: **9.725 -> 1.076 ms**. Release CPU cost: **0.313 -> 0.308 ms/frame**;
+  this small Release difference is within noise, not a claimed speedup.
+- Before/after state hash `bf1adbee369e407d` and path-request counts match in both build types.
+  Full JSON profiles also compare equal between old/new executables after 6,000 seed-42 ticks.
+
+Verification:
+
+- `cmake --build --preset dev -j 4` and `cmake --build --preset release -j 4`: pass.
+- `./build/dev/ant_tests '[navigation],[terrain-damage],[snapshot],[nest-network]'`:
+  **1,962 assertions in 32 cases pass**, including new scratch-reuse and chunk-boundary regressions.
+- `sh -n play.command` and `git diff --check`: pass.
+
+[PERFORMANCE_REPORT](PERFORMANCE_REPORT.md) records methodology and reproducible benchmark commands.
+These are short CPU comparisons; GPU timing and integrated FPS were not measured after the change.
+No visual QA/live restart, full 1,000/5,000-worker gate, sanitizer or soak was performed. Full T015
+remains open; T003b and T013a remain the next gameplay/motion and pacing work.
+
+## Earlier session — T014i: a connected working nest
 
 Implemented persistent branches from reachable nest air, routes around stone, retained three-cell
 passage shoulders and optional cross-passages that shorten existing room-to-room journeys.

@@ -4,7 +4,9 @@ Reviewed 2026-09-07 against `f1ddf4c` on `main`. The starting worktree was clean
 
 ## Current continuation — 2026-09-08
 
-The audit below is historical; STATUS records the later T014a–h implementation. T014i now adds
+The audit below is historical; STATUS records the later T014a–h implementation.
+T015a now also optimizes pathfinding scratch and terrain chunk uploads for reported 20x slowdown;
+see [PERFORMANCE_REPORT](PERFORMANCE_REPORT.md) for the measured CPU improvement and remaining gates. T014i now adds
 persistent branches around rock, cross-passages that shorten journeys, construction priorities,
 and schema-4 saved passage intent. See [NEST_NETWORK](../design/NEST_NETWORK.md) for the working
 loop and exact limits. This session intentionally omits visual QA and a full balance sweep at the

@@ -162,3 +162,15 @@ A render view includes entity poses/cargo, visible terrain revisions, resource t
 ## Explicit non-goals
 
 No custom ECS, grain physics, full genetic model, universal save reflection, plugin system, hot reload framework, generational scripting language, or web frontend. A browser build can be assessed after the native loop is enjoyable; do not pay for that abstraction now.
+
+## T015a performance ownership (2026-09-08)
+
+`World` owns one reusable `Pathfinder`; visited-search stamps, costs, parents and the heap are
+scratch only. No cross-world/global cache or worker thread is introduced. `find_path` remains a
+convenience entry point with fresh scratch for isolated queries. `ant_benchmark` measures sim/view
+CPU time in a graphics-free executable; wall-clock measurement does not enter `ant_sim`.
+
+The renderer retains one terrain texture and its CPU pixel buffer. A graphics-free
+`presentation/terrain_damage` helper marks 32x32 chunks affected by changed material neighbors and
+old/new room geometry. Chunk pixels upload through `UpdateTextureRec`; unchanged chunks keep their
+pixels. This supersedes the full-map rebake description in the historical NEXT_STEPS audit.

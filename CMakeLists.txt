@@ -73,12 +73,18 @@ target_link_libraries(ant_headless PRIVATE ant_game ant_persistence)
 target_compile_definitions(ant_headless PRIVATE ANT_SOURCE_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
 ant_configure_target(ant_headless)
 
+add_executable(ant_benchmark src/headless/benchmark.cpp)
+target_link_libraries(ant_benchmark PRIVATE ant_game ant_persistence)
+target_compile_definitions(ant_benchmark PRIVATE ANT_SOURCE_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config")
+ant_configure_target(ant_benchmark)
+
 if(ANT_BUILD_DESKTOP)
   add_library(ant_presentation
     src/presentation/camera.cpp
     src/presentation/desktop_input.cpp
     src/presentation/icons.cpp
     src/presentation/renderer.cpp
+    src/presentation/terrain_damage.cpp
     src/presentation/ui_state.cpp
     src/presentation/interaction.cpp
   )
@@ -123,6 +129,7 @@ if(BUILD_TESTING)
     src/app/asset_paths.cpp
     src/app/save_coordinator.cpp
     src/app/window_size.cpp
+    src/presentation/terrain_damage.cpp
     src/presentation/ui_state.cpp
     src/presentation/interaction.cpp
     tests/unit/asset_paths_tests.cpp
@@ -140,6 +147,7 @@ if(BUILD_TESTING)
     tests/unit/ui_state_tests.cpp
     tests/unit/interaction_tests.cpp
     tests/unit/task_system_tests.cpp
+    tests/unit/terrain_damage_tests.cpp
     tests/unit/window_size_tests.cpp
     tests/unit/world_tests.cpp
   )

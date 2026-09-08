@@ -35,6 +35,7 @@ The [audit and design guide](NEXT_STEPS.md) defines source findings, implementat
 | T013a | Re-baseline geometry/motion, affordable first trait, delayed flight and long-lived colony policies | T006b, T003b | Five seeds × both policies, tier-I local benefit measurement, larger-payout and no-flight evidence |
 | T014c — partial | Pointer/keyboard flight confirmation, shop resume, save failure and normal defeat restart | T014a, T013a | Actual cancel/commit/shop/reload/new-colony flow with both input methods |
 | T014d | Onboarding, trends, four clear cards, scaling and reduced motion | T014b, T014c | Required scenes, minimum-size/scaling/focus review; limitations recorded |
+| T015a — implemented | Profile reported 20x slowdown; reuse pathfinding scratch, update damaged terrain chunks, ship a Release play launcher | Owner-requested scope | Debug/Release comparative benchmark, exact seeded state and scoped regressions; full T015 gate stays open |
 | T015 remaining | Population/renderer/save benchmarks, sanitizers, two-hour soak | T013a, T014d | Full VALIDATION report or explicit release scope reduction |
 | T016 remaining | `.app`, archive/version/attribution and external launch/restart | T015 | Local package works independently of cwd; publication only if requested |
 
